@@ -1,0 +1,11 @@
+// The content script's capture pipeline without the Chrome UI, for test/runtime.html.
+export { captureElement } from '../src/content/extract'
+export { Inspector } from '../src/content/inspector'
+export { inspectRuntime } from '../src/content/runtime'
+export { wantsScrollRecording } from '../src/content/scroll'
+export { buildPrompt } from '../src/shared/prompt'
+export { collectSectionMedia } from '../src/content/extract'
+export { mergeAssets } from '../src/content/media'
+export { recordInteractions } from '../src/content/interactions'
+export { captureFullSection, initialShot } from '../src/content/frames'
+export { extractShaders, findCanvasCode } from '../src/content/code'

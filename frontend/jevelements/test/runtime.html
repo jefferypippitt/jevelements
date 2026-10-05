@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>JevElements probe test</title>
+    <!-- Loaded first, like the extension's document_start MAIN-world content script. With ?late it's
+         left out, like a tab opened before the extension was installed. -->
+    <script>
+      if (!location.search.includes('late')) document.write('<script src="/dist/probe.js"><\/script>')
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lottie-web@5.12.2/build/player/lottie.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.3.4/dist/lenis.min.js"></script>
+    <script type="importmap">
+      { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js" } }
+    </script>
+    <style>
+      body { margin: 0; font-family: system-ui; background: #0b0b0f; color: #fff; }
+      #hero { position: relative; height: 120vh; padding: 40px; }
+      canvas { display: block; margin-bottom: 16px; }
+      .card { width: 160px; height: 60px; background: #6d5dfc; border-radius: 12px; margin: 8px 0; }
+      .spacer { height: 200vh; }
+    </style>
+  </head>
+  <body>
+    <section id="hero">
+      <h1 class="title">Probe test</h1>
+      <canvas id="three" width="480" height="300"></canvas>
+      <canvas id="raw" width="240" height="160"></canvas>
+      <div id="lottie" style="width: 160px; height: 160px"></div>
+      <div class="card one"></div>
+      <div class="card two"></div>
+    </section>
+    <div class="spacer"></div>
+
+    <script type="module">
+      import * as THREE from 'three'
+      const canvas = document.getElementById('three')
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+      renderer.setClearColor(0x101018)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      const scene = new THREE.Scene()
+      const camera = new THREE.PerspectiveCamera(45, 480 / 300, 0.1, 100)
+      camera.position.set(0, 0, 4)
+      const material = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color('#ff5a1f') } },
+        vertexShader: 'uniform float uTime; varying vec3 vN; void main(){ vN = normal; vec3 p = position + normal * sin(uTime + position.y * 4.0) * 0.08; gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }',
+        fragmentShader: 'uniform vec3 uColor; varying vec3 vN; void main(){ gl_FragColor = vec4(uColor * (0.5 + 0.5 * vN.z), 1.0); }',
+      })
+      const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 16), material)
+      blob.name = 'Blob'
+      scene.add(blob, new THREE.AmbientLight(0xffffff, 0.4))
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: '#22d3ee', roughness: 0.3, metalness: 0.6 }))
+      box.position.x = 1.6
+      scene.add(box)
+      window.__test = { blob, material, renderer, scene, camera }
+      const clock = new THREE.Clock()
+      renderer.setAnimationLoop(() => {
+        const t = clock.getElapsedTime()
+        material.uniforms.uTime.value = t
+        blob.rotation.y = t * 0.5
+        box.rotation.x = t
+        renderer.render(scene, camera)
+      })
+    </script>
+
+    <script>
+      // Hand-written WebGL with an animated uniform.
+      const gl = document.getElementById('raw').getContext('webgl')
+      const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s }
+      const program = gl.createProgram()
+      gl.attachShader(program, compile(gl.VERTEX_SHADER, 'attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }'))
+      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, 'precision mediump float; uniform float u_time; uniform vec2 u_res; void main(){ vec2 uv = gl_FragCoord.xy / u_res; gl_FragColor = vec4(uv, 0.5 + 0.5 * sin(u_time), 1.0); }'))
+      gl.linkProgram(program)
+      gl.useProgram(program)
+      const buf = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
+      const loc = gl.getAttribLocation(program, 'p')
+      gl.enableVertexAttribArray(loc)
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
+      const uTime = gl.getUniformLocation(program, 'u_time')
+      gl.uniform2f(gl.getUniformLocation(program, 'u_res'), 240, 160)
+      const draw = (ms) => { gl.uniform1f(uTime, ms / 1000); gl.drawArrays(gl.TRIANGLES, 0, 3); requestAnimationFrame(draw) }
+      requestAnimationFrame(draw)
+
+      // GSAP timeline + ScrollTrigger.
+      gsap.registerPlugin(ScrollTrigger)
+      const tl = gsap.timeline({ repeat: -1, yoyo: true, defaults: { ease: 'power2.inOut' } })
+      tl.to('.card.one', { x: 120, duration: 1.2 }).fromTo('.card.two', { opacity: 0.2 }, { opacity: 1, scale: 1.1, duration: 0.8 }, '-=0.4')
+      gsap.to('.title', { y: -80, ease: 'none', scrollTrigger: { trigger: '#hero', start: 'top top', end: 'bottom top', scrub: true } })
+
+      // Lottie from inline data.
+      lottie.loadAnimation({
+        container: document.getElementById('lottie'),
+        renderer: 'svg',
+        loop: true,
+        autoplay: true,
+        animationData: {
+          v: '5.7.4', fr: 30, ip: 0, op: 60, w: 160, h: 160, nm: 'spin', ddd: 0, assets: [],
+          layers: [{
+            ddd: 0, ind: 1, ty: 4, nm: 'square', sr: 1, ao: 0, ip: 0, op: 60, st: 0, bm: 0,
+            ks: {
+              o: { a: 0, k: 100 },
+              r: { a: 1, k: [{ t: 0, s: [0], i: { x: [0.5], y: [0.5] }, o: { x: [0.5], y: [0.5] } }, { t: 60, s: [360] }] },
+              p: { a: 0, k: [80, 80, 0] }, a: { a: 0, k: [0, 0, 0] }, s: { a: 0, k: [100, 100, 100] },
+            },
+            shapes: [
+              { ty: 'rc', d: 1, s: { a: 0, k: [70, 70] }, p: { a: 0, k: [0, 0] }, r: { a: 0, k: 8 }, nm: 'rect' },
+              { ty: 'fl', c: { a: 0, k: [1, 0.35, 0.12, 1] }, o: { a: 0, k: 100 }, r: 1, nm: 'fill' },
+            ],
+          }],
+        },
+      })
+
+      // Lenis smooth scroll.
+      window.lenis = new Lenis({ lerp: 0.08, wheelMultiplier: 1.2 })
+      const raf = (t) => { window.lenis.raf(t); requestAnimationFrame(raf) }
+      requestAnimationFrame(raf)
+    </script>
+  </body>
+</html>

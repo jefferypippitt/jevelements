@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "JevElements",
+  "version": "0.2.0",
+  "description": "Hover any section of a website and copy a prompt to rebuild it 1:1: styles, assets, SVGs, animations, WebGL and 3D.",
+  "action": {
+    "default_title": "JevElements: pick a section (Alt+Shift+E)"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["probe.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "commands": {
+    "toggle-inspector": {
+      "suggested_key": { "default": "Alt+Shift+E" },
+      "description": "Toggle the section picker on the current page"
+    }
+  }
+}

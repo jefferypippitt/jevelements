@@ -1,0 +1,300 @@
+/*
+ * On-page UI. Loaded as a string into a shadow root, so the host page can't affect it.
+ * Colors, radius, font and control height come from theme.css.
+ * Buttons come in three variants (.btn-primary / .btn-outline / .btn-ghost) at one size (--control-height).
+ */
+@import "./theme.css";
+
+:host {
+  all: initial;
+  color-scheme: dark; /* after all: initial, which would reset it */
+}
+* {
+  box-sizing: border-box;
+}
+
+/* ---------- picker ---------- */
+
+.highlight {
+  position: fixed; pointer-events: none; z-index: 2147483646; display: none;
+  border: 2px solid var(--highlight);
+  background: color-mix(in oklab, var(--highlight) 12%, transparent);
+  border-radius: 2px; transition: all 60ms ease-out;
+}
+.label {
+  position: fixed; pointer-events: none; z-index: 2147483647; display: none;
+  font: 600 11px/1 var(--font-code);
+  background: var(--highlight); color: #fff; padding: 4px 6px; border-radius: 4px;
+  white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis;
+}
+.label .dim { opacity: 0.75; font-weight: 400; }
+
+/* The one floating toolbar while picking: brand + keybinds, pinned to the top center. */
+.toolbar {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2147483647;
+  display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px); white-space: nowrap;
+  padding: 8px 16px; pointer-events: none;
+  font: 500 12px/1.4 var(--font-ui); -webkit-font-smoothing: antialiased;
+  background: var(--background); color: var(--muted-foreground);
+  border: 1px solid var(--border); border-radius: calc(var(--radius) * 1.4);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+.toolbar .brand { color: var(--foreground); font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.toolbar .sep { width: 1px; height: 16px; background: var(--border); }
+.toolbar .group { display: inline-flex; align-items: center; gap: 4px; }
+.toolbar .or { padding: 0 1px; opacity: 0.6; }
+kbd {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px;
+  padding: 0 4px; border-radius: 6px; background: var(--muted); color: var(--muted-foreground);
+  font: 500 12px/1 var(--font-ui);
+}
+kbd svg { width: 12px; height: 12px; }
+
+/* ---------- result panel: non-modal drawer from the right (shadcn Drawer, modal={false}) ----------
+   No backdrop, the page stays interactive, outside clicks don't close it. Swipe it right to dismiss. */
+
+.panel {
+  position: fixed; top: 0; bottom: 0; right: 0; z-index: 2147483647;
+  width: min(384px, 75vw);
+  display: flex; flex-direction: column;
+  background: var(--popover); color: var(--foreground);
+  border-left: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.4) 0 0 calc(var(--radius) * 1.4);
+  font: 400 14px/1.45 var(--font-ui); -webkit-font-smoothing: antialiased;
+  user-select: none; touch-action: pan-y; will-change: transform;
+  transform-origin: right center;
+  transition: transform 450ms cubic-bezier(0.22, 1, 0.36, 1), filter 450ms cubic-bezier(0.22, 1, 0.36, 1); /* = DRAWER_MS in inspector.ts */
+}
+.panel.swiping { transition: none; }
+
+/* A drawer with another stacked on top (shadcn nested drawer): it shrinks by 5%, peeks out 16px to
+   the left of the front drawer, dims slightly, and its content fades out. */
+.panel.behind { transform: translateX(calc(-16px - 5%)) scale(0.95); filter: brightness(0.95); }
+.panel > * { transition: opacity 300ms cubic-bezier(0.45, 1.005, 0, 1.005); }
+.panel.behind > * { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .panel { transition: none; } }
+
+.panel header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 0 16px; }
+.panel h2 { margin: 0; font-size: 16px; font-weight: 500; }
+.body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; padding: 0 16px 16px; }
+.actions:empty { display: none; }
+.actions .row { display: flex; gap: 8px; }
+.actions .row > .btn { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.note {
+  margin: 0; flex-shrink: 0; padding: 8px 10px; font-size: 12px; color: var(--muted-foreground); user-select: text;
+  border: 1px solid var(--border); border-radius: var(--radius); background: color-mix(in oklab, var(--muted) 40%, transparent);
+}
+.note[hidden] { display: none; }
+
+.tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag { /* = shadcn Badge variant="secondary" */
+  display: inline-flex; align-items: center; height: 20px; padding: 2px 8px; border-radius: 999px;
+  background: var(--secondary); color: var(--secondary-foreground); font-size: 12px; font-weight: 500;
+}
+
+/* Screenshot preview: one fixed 4:3 frame for every capture (like shadcn's AspectRatio), on a dot-grid
+   canvas. layoutPreview() in inspector.ts sizes the image inside it: fit to width, never past real
+   size, centered when smaller (auto margins), scrolling when larger. */
+.stage { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+.preview {
+  flex-shrink: 0; width: 100%; aspect-ratio: 4 / 3; min-height: 0;
+  display: flex; overflow: auto;
+  padding: 12px; /* = PREVIEW_PADDING */
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background-color: var(--background); background-attachment: local;
+  background-image: radial-gradient(color-mix(in oklab, var(--foreground) 14%, transparent) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+.preview img {
+  display: block; flex-shrink: 0; margin: auto; max-width: none;
+  border-radius: 4px; box-shadow: 0 1px 3px rgb(0 0 0 / 40%), 0 0 0 1px var(--border);
+}
+.caption { margin: 0; text-align: center; font-size: 12px; color: var(--muted-foreground); }
+/* Rendered prompt, following shadcn/typeset (https://ui.shadcn.com/docs/typeset).
+   .typeset turns element styles on. .typeset-prompt is the drawer preset: smaller than
+   typeset-docs, because this column is 384px and mostly nested lists and code.
+   Element rules use :where() so a later rule can override them. Spacing is margin-block-start
+   only, so appending a block does not restyle the ones above it. */
+.panel .typeset {
+  --typeset-font-body: var(--font-ui);
+  --typeset-font-heading: var(--font-ui);
+  --typeset-font-mono: var(--font-code);
+  --typeset-size: 1em;
+  --typeset-leading: 1.75;
+  --typeset-flow: 1.25em;
+
+  flex: 1 1 0; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  margin: 0; outline: none; cursor: text;
+  color: var(--foreground);
+  font-family: var(--typeset-font-body);
+  font-size: var(--typeset-size);
+  font-weight: 400;
+  line-height: var(--typeset-leading);
+  user-select: text;
+}
+.panel .typeset-prompt {
+  --typeset-size: 13px;
+  --typeset-leading: 1.5;
+  --typeset-flow: 0.75em;
+}
+/* Typeset bumps body size slightly on small screens. The drawer is already a narrow column,
+   so the preset size stays put. */
+.panel .typeset:focus-visible { box-shadow: inset 0 0 0 1px var(--ring); }
+
+.panel .typeset :where(h1, h2, h3, h4, h5, h6, p, ul, pre, figure) {
+  margin-block-start: var(--typeset-flow);
+  margin-block-end: 0;
+}
+.panel .typeset :where(h1, h2, h3) { margin-block-start: calc(var(--typeset-flow) * 1.75); }
+.panel .typeset > :where(:first-child) { margin-block-start: 0; }
+
+.panel .typeset :where(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--typeset-font-heading);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  color: var(--foreground);
+}
+.panel .typeset :where(h1) { font-size: 1.35em; }
+.panel .typeset :where(h2) { font-size: 1.12em; }
+.panel .typeset :where(h3, h4, h5, h6) { font-size: 1em; }
+
+.panel .typeset :where(a) {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  overflow-wrap: anywhere;
+}
+.panel .typeset :where(a:hover) { color: var(--muted-foreground); }
+.panel .typeset :where(strong) { font-weight: 600; }
+
+.panel .typeset :where(ul) { padding-inline-start: 1.15em; list-style: disc; }
+.panel .typeset :where(ul ul) { list-style: circle; }
+.panel .typeset :where(li + li) { margin-block-start: 0.35em; }
+.panel .typeset :where(li > ul),
+.panel .typeset :where(li > p),
+.panel .typeset :where(li > figure),
+.panel .typeset :where(li > pre) { margin-block-start: 0.3em; }
+
+.panel .typeset :where(li.task) { list-style: none; }
+.panel .typeset :where(li.task input) {
+  appearance: none; width: 0.85em; height: 0.85em; margin: 0 0.45em 0 0;
+  border: 1px solid var(--muted-foreground); border-radius: 3px;
+  vertical-align: -0.1em; background: transparent; pointer-events: none;
+}
+.panel .typeset :where(li.task input:checked) {
+  background: var(--foreground); border-color: var(--foreground);
+}
+
+.panel .typeset :where(:not(pre) > code) {
+  font-family: var(--typeset-font-mono);
+  font-size: 0.92em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  overflow-wrap: anywhere;
+}
+.panel .typeset :where(figure) { margin-inline: 0; }
+.panel .typeset :where(figcaption) {
+  margin: 0 0 0.35em;
+  font-family: var(--typeset-font-mono);
+  font-size: 0.8em;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+.panel .typeset :where(figure pre) { margin-block-start: 0; }
+.panel .typeset :where(pre) {
+  max-width: 100%; max-height: 240px; overflow: auto;
+  padding: 0.7em 0.8em;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
+  background: color-mix(in oklab, var(--muted) 45%, transparent);
+  font-family: var(--typeset-font-mono);
+  font-size: 0.85em;
+  line-height: 1.55;
+}
+.panel .typeset :where(pre code) {
+  font-family: inherit; font-size: inherit; white-space: pre; overflow-wrap: normal;
+}
+
+/* Opt out a subtree, the way Typeset's not-typeset does. */
+.panel .typeset :where(.not-typeset, .not-typeset *, [data-not-typeset], [data-not-typeset] *) {
+  margin: 0; font: inherit; color: inherit; letter-spacing: normal;
+}
+
+/* Scrollbars styled like shadcn's ScrollArea: no track, thin rounded thumb that brightens on hover.
+   The transparent border insets the thumb from the edge. (:host's `all: initial` stops a host page's
+   inherited scrollbar-color from overriding these.) */
+.panel ::-webkit-scrollbar { width: 10px; height: 10px; }
+.panel ::-webkit-scrollbar-track,
+.panel ::-webkit-scrollbar-corner { background: transparent; }
+.panel ::-webkit-scrollbar-thumb {
+  background: var(--input); background-clip: padding-box;
+  border: 3px solid transparent; border-radius: 999px;
+}
+.panel ::-webkit-scrollbar-thumb:hover { background-color: var(--ring); }
+
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0;
+  height: var(--control-height); padding: 0 10px; margin: 0;
+  border: 1px solid transparent; border-radius: var(--radius); background-clip: padding-box;
+  font: 500 14px/1 var(--font-ui); white-space: nowrap; cursor: pointer; outline: none;
+  transition: background-color 150ms, color 150ms, border-color 150ms, box-shadow 150ms;
+}
+.btn:focus-visible { border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.5; pointer-events: none; }
+
+/* Spinner inside a busy button (shadcn Spinner: lucide loader-circle, size-4, animate-spin). */
+.btn .spin { width: 16px; height: 16px; flex-shrink: 0; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.btn-primary { background: var(--primary); color: var(--primary-foreground); }
+.btn-primary:hover { background: color-mix(in oklab, var(--primary) 80%, transparent); }
+
+.btn-outline { border-color: var(--input); background-color: color-mix(in oklab, var(--input) 30%, transparent); color: var(--foreground); }
+.btn-outline:hover { background-color: color-mix(in oklab, var(--input) 50%, transparent); }
+
+.btn-ghost { background: transparent; color: var(--muted-foreground); }
+.btn-ghost:hover { background: color-mix(in oklab, var(--muted) 50%, transparent); color: var(--foreground); }
+.btn-icon { width: var(--control-height); padding: 0; font-size: 16px; }
+
+/* Capture log, matching shadcn Marker: a row with an icon slot and content.
+   The active row's text shimmers while that step is still gathering. */
+.markers { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding-top: 8px; }
+.marker {
+  display: flex; align-items: center; gap: 8px; min-height: 16px; width: 100%;
+  text-align: left; font-size: 14px; line-height: 1.4; color: var(--muted-foreground);
+}
+.marker-icon { display: inline-flex; width: 16px; height: 16px; flex-shrink: 0; }
+.marker-icon svg { width: 16px; height: 16px; }
+.marker-icon .spin { animation: spin 1s linear infinite; }
+.marker-content { min-width: 0; overflow-wrap: anywhere; }
+.marker[data-state='error'] { color: var(--foreground); }
+.marker-content.shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer 2.4s linear infinite;
+}
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marker-content.shimmer { animation: none; color: var(--muted-foreground); background: none; }
+  .marker-icon .spin { animation: none; }
+}

@@ -1,0 +1,37 @@
+/*
+ * JevElements design tokens: the single source of truth for the on-page UI (imported by overlay.css).
+ * shadcn palette (dark set, magenta primary); --highlight (blue) is reserved for the hover ring around the picked element.
+ * Tokens live on :host, not :root, because :root variables don't reach into the shadow root.
+ * Sizes are px, not rem: inside a shadow root, rem follows the host page's root font size.
+ */
+:host {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.452 0.211 324.591);
+  --primary-foreground: oklch(0.977 0.017 320.058);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.833 0.145 321.434);
+  --chart-2: oklch(0.667 0.295 322.15);
+  --chart-3: oklch(0.591 0.293 322.896);
+  --chart-4: oklch(0.518 0.253 323.949);
+  --chart-5: oklch(0.452 0.211 324.591);
+  --highlight: oklch(0.623 0.214 259.815); /* blue-500 */
+
+  --radius: 10px;
+  --control-height: 32px; /* every button */
+  --font-ui: 'JevElements Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-code: ui-monospace, SFMono-Regular, Consolas, monospace;
+}

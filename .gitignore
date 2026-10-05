@@ -1,0 +1,9 @@
+# Secrets: never commit env files anywhere in the repo (templates are fine)
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+dist/
+.next/
