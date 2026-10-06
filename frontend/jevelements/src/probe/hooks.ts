@@ -2,6 +2,8 @@
 // back later: which scenes three.js renders (via the __THREE_DEVTOOLS__ hook three.js itself calls,
 // the same one the three.js devtools extension uses), and the GLSL sources and image textures handed
 // to WebGL. Each hook only stores references, so pages pay next to nothing for them.
+import { installPhysicsHooks } from './physics'
+import { installTransitionHooks } from './transitions'
 
 const MAX_PROGRAMS_PER_CANVAS = 30
 const MAX_TEXTURES_PER_CANVAS = 40
@@ -56,6 +58,8 @@ export function installHooks(late: boolean): HookState {
   hookThree(state)
   hookWebGL(state)
   hookWorkers(state)
+  installPhysicsHooks()
+  installTransitionHooks()
   return state
 }
 

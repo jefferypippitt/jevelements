@@ -203,12 +203,34 @@ export interface LottieData {
   json?: string // the animation data itself
 }
 
+// A live physics world. Bodies are already sentences: the probe reads the engine, it does not
+// re-simulate it. Matter bodies that sit on a DOM node name that node.
+export interface PhysicsWorld {
+  engine: 'matter' | 'cannon' | 'rapier'
+  gravity: string
+  bodies: string[]
+  constraints: string[]
+  mouse?: string
+  note?: string
+}
+
+// A page transition registered on the page (Barba, Swup, the View Transition API). `code` is the
+// leave/enter functions as written, so a stairs or pixel transition can be ported from the original.
+export interface PageTransition {
+  library: string
+  summary: string
+  steps: string[]
+  code?: { label: string; source: string }[]
+}
+
 export interface RuntimeData {
   libraries: Library[]
   three: ThreeData[]
   webgl: WebGLData[]
   gsap?: GsapData
   lottie: LottieData[]
+  physics?: PhysicsWorld[]
+  transitions?: PageTransition[]
   smoothScroll?: string // e.g. Lenis options
   lateProbe: boolean // the probe arrived after the page loaded, so it missed three.js scenes and shader sources
   workers: string[] // Web Worker scripts the page started (an OffscreenCanvas may draw from one)
@@ -243,9 +265,10 @@ export interface ScrollStory {
 
 // ---------- interactions (src/content/interactions.ts) ----------
 // Hovers and clicks played on the live page with synthetic pointer events, and what they changed.
+// `pointer` is one sweep across the section when the page follows the mouse (a cursor gallery).
 
 export interface Interaction {
-  kind: 'hover' | 'click'
+  kind: 'hover' | 'click' | 'pointer'
   target: string // element label, as in the tree
   text?: string // its visible text or aria-label
   similar: number // elements that look the same and weren't played (cards in a grid, carousel dots)
@@ -255,12 +278,59 @@ export interface Interaction {
   disappeared: string[]
   animations: string[] // transitions and animations that ran, with duration and easing
   restored: boolean // the section went back to how it was afterwards
+  // What kept changing after the click settled, step by step: a mock UI playing a sequence (a message
+  // streams in, a tool runs, a diff appears).
+  phases?: InteractionPhase[]
+  // The region whose content the click (and its phases) replaced, read as a full tree at the end: an
+  // alternate state of the section, built like the main tree.
+  layers?: { target: string; tree: CapturedNode }[]
+  // A click the state explorer played inside a component (see ComponentStates): the state it was
+  // clicked in and the state it led to. These aren't undone; the explorer moves between states itself.
+  state?: { component: string; from: string; to: string }
+}
+
+// ---------- component states (src/content/states.ts) ----------
+// A component that holds several states behind its own controls: a mock IDE whose sidebar switches
+// agents, each with its own tabs, file tree and panes; tabs whose panels hold more tabs. Explored as
+// a graph: every state its controls lead to, including the controls that only exist in a state a
+// click brought up. Each state is the whole component read again (sidebar, tab strip and panes
+// together, not just the part that changed), with parts already seen in an earlier state folded away.
+
+export interface ComponentState {
+  id: string // "S0" is the initial state (in the main tree), then "S1", "S2", … in the order found
+  // How to get here from S0: the clicks, as `label` "text"
+  path: string[]
+  tree?: CapturedNode // missing for S0; '…' nodes whose note says "same as in S…" stand for unchanged parts
+  // Menus, popovers and dialogs open in this state, rendered on <body> outside the component (portals)
+  portals?: { target: string; tree: CapturedNode }[]
+}
+
+export interface StateTransition {
+  from: string
+  to: string
+  control: string // `label` "text" of what was clicked
+}
+
+export interface ComponentStates {
+  target: string // the component's root element
+  signal: string // why it was explored as one component: "mock UI (aria-hidden demo)", "tabs"
+  states: ComponentState[]
+  transitions: StateTransition[]
+  unexplored: string[] // controls left when the time or state budget ran out
+  restored: boolean // it was back in S0 at the end
+}
+
+export interface InteractionPhase {
+  at: number // ms after the click
+  changes: string[]
+  appeared: string[]
 }
 
 export interface InteractionReport {
-  tested: { hover: number; click: number }
+  tested: { hover: number; click: number; pointer: number }
   skipped: string[] // left alone on purpose: "button "Delete account" (destructive)"
   items: Interaction[] // only interactions that changed something
+  components?: ComponentStates[] // components whose nested states were explored click by click
   media?: Asset[] // images and videos that hovers and clicks brought on screen; merged into Capture.assets
 }
 
@@ -341,7 +411,9 @@ export const DEFAULT_SETTINGS: Settings = {
   backendToken: '',
 }
 
-export type ContentMessage = { type: 'jev:toggle' }
+// 'jev:interrupted': the tab left the page while a capture was running there (the background worker
+// sends it to the content script on the new page, which shows why the drawer vanished).
+export type ContentMessage = { type: 'jev:toggle' } | { type: 'jev:interrupted'; from: string; to: string }
 
 export type ScreenshotMessage = {
   type: 'jev:screenshot'
@@ -369,7 +441,11 @@ export type ProjectResponse = { name: string; zip: string } | { error: string }
 // the extension was installed or updated).
 export type InjectProbeMessage = { type: 'jev:inject-probe' }
 
-export type BackgroundMessage = ScreenshotMessage | AnalyzeMessage | InjectProbeMessage | SaveMediaMessage | UploadMessage | ProjectMessage
+// A capture started (active) or ended in this tab. While one runs, a page load in the tab means it was
+// interrupted.
+export type CapturingMessage = { type: 'jev:capturing'; active: boolean }
+
+export type BackgroundMessage = ScreenshotMessage | AnalyzeMessage | InjectProbeMessage | SaveMediaMessage | UploadMessage | ProjectMessage | CapturingMessage
 
 export type ScreenshotResponse = { dataUrl: string } | { error: string }
 

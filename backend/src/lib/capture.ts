@@ -24,9 +24,16 @@ export interface Capture {
   responsive: { media: string; selector: string; declarations: string }[]
   keyframes: string[]
   libraries?: { name: string; version?: string }[]
-  runtime?: { three: unknown[]; webgl: unknown[]; lottie: unknown[]; gsap?: { tweens: unknown[] } }
+  runtime?: {
+    three: unknown[]
+    webgl: unknown[]
+    lottie: unknown[]
+    gsap?: { tweens: unknown[] }
+    physics?: { engine: string; bodies: unknown[] }[]
+    transitions?: { library: string }[]
+  }
   scrollStory?: { phases: { kind: string }[]; pinned: unknown[] }
-  interactions?: { items: { kind: string; target: string; appeared: string[] }[] }
+  interactions?: { items: { kind: string; target: string; appeared: string[] }[]; components?: { target: string; states: unknown[] }[] }
 }
 
 export function isCapture(value: unknown): value is Capture {
@@ -59,9 +66,17 @@ export function captureState(capture: Capture, siblingGroups: string): CaptureSt
       `Responsive rules: ${capture.responsive.length}, keyframe animations: ${capture.keyframes.length}`,
       `Libraries: ${capture.libraries?.map((library) => library.name).join(', ') || 'none detected'}`,
       `three.js scenes: ${capture.runtime?.three.length ?? 0}, raw WebGL canvases: ${capture.runtime?.webgl.length ?? 0}, Lottie animations: ${capture.runtime?.lottie.length ?? 0}, GSAP tweens: ${capture.runtime?.gsap?.tweens.length ?? 0}`,
+      ...(capture.runtime?.physics?.length || capture.runtime?.transitions?.length
+        ? [
+            `Physics: ${capture.runtime?.physics?.map((world) => `${world.engine} (${world.bodies.length} bodies)`).join(', ') || 'none'}. Page transitions: ${capture.runtime?.transitions?.map((transition) => transition.library).join(', ') || 'none'}`,
+          ]
+        : []),
       `Interactions played on the page: ${
         capture.interactions?.items.map((item) => `${item.kind} ${item.target}${item.appeared.length ? ' (reveals content)' : ''}`).join(', ') || 'none that changed anything'
       }`,
+      ...(capture.interactions?.components?.length
+        ? [`Components with states of their own (explored click by click): ${capture.interactions.components.map((component) => `${component.target} (${component.states.length} states)`).join(', ')}`]
+        : []),
       `Scroll story: ${capture.scrollStory ? `${capture.scrollStory.phases.filter((phase) => phase.kind === 'change').length} phases that change on scroll, ${capture.scrollStory.pinned.length} pinned elements` : 'not recorded'}`,
     ].join('\n'),
     siblingGroups,

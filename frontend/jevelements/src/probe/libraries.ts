@@ -43,7 +43,11 @@ export function detectLibraries(): Library[] {
   if (w.Splide || has('.splide.is-initialized')) add('Splide')
   if (w.Flickity || has('.flickity-enabled')) add('Flickity')
   if (w.jQuery?.fn?.slick || has('.slick-initialized')) add('Slick')
-  if (w.barba) add('Barba.js')
+  if (w.Matter) add('Matter.js', w.Matter.version)
+  if (w.CANNON) add('cannon-es', w.CANNON.version)
+  if (w.RAPIER) add('Rapier')
+  if (w.barba) add('Barba.js', w.barba.version)
+  if (w.swup) add('Swup')
   if (w.Typed) add('Typed.js')
   if (w.Alpine) add('Alpine.js', w.Alpine.version)
   return found

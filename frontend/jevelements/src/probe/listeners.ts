@@ -2,7 +2,7 @@
 // added with addEventListener (vanilla, GSAP, jQuery, Motion's gestures) are recorded from
 // document_start, and React handlers are read from the props React keeps on each DOM node. The content
 // script reads the result from a data attribute, then hovers and clicks those elements.
-import { PROBE_INTERACTIVE_ATTR } from '../shared/runtime'
+import { PROBE_INTERACTIVE_ATTR, PROBE_POINTER_ATTR } from '../shared/runtime'
 
 const HOVER_EVENTS = new Set(['mouseenter', 'mouseover', 'pointerenter', 'pointerover', 'mousemove', 'pointermove'])
 const CLICK_EVENTS = new Set(['click', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'touchstart'])
@@ -45,10 +45,28 @@ function reactKinds(el: Element): Set<'hover' | 'click'> {
   return kinds
 }
 
-export function markInteractive(root: Element) {
+export function markHandlers(root: Element) {
   const elements = [root, ...Array.from(root.querySelectorAll('*')).slice(0, MAX_ELEMENTS)]
   for (const el of elements) {
     const kinds = new Set([...(listened.get(el) ?? []), ...reactKinds(el)])
     if (kinds.size) el.setAttribute(PROBE_INTERACTIVE_ATTR, Array.from(kinds).join(' '))
   }
+}
+
+export function markInteractive(root: Element) {
+  markHandlers(root)
+  const pointer = pointerTarget(root)
+  if (pointer) document.documentElement.setAttribute(PROBE_POINTER_ATTR, pointer)
+}
+
+function listens(target: EventTarget): boolean {
+  return listened.get(target)?.has('hover') ?? false
+}
+
+// A gallery that follows the cursor listens on the window, or on the section itself. A button's
+// hover listener is not that: the hover pass already plays it.
+function pointerTarget(root: Element): 'window' | 'section' | null {
+  if (listens(window) || listens(document) || listens(document.documentElement) || listens(document.body)) return 'window'
+  if (listens(root) || root.getAttribute(PROBE_INTERACTIVE_ATTR)?.includes('hover')) return 'section'
+  return null
 }

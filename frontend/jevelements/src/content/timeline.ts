@@ -109,7 +109,9 @@ function applyStyleMotion(visible: [Element, CapturedNode][], frames: string[][]
   })
 }
 
-export async function recordSimulation(root: Element, visible: [Element, CapturedNode][], earlier?: TextLog): Promise<Simulation> {
+// `moved` collects the elements that changed while the page sat idle (children, attributes, text), so
+// the state explorer can tell a demo that plays itself, and a click's changes from the page's own.
+export async function recordSimulation(root: Element, visible: [Element, CapturedNode][], earlier?: TextLog, moved?: Set<Element>): Promise<Simulation> {
   const started = performance.now()
   const seconds = () => Math.round(((performance.now() - started) / 1000) * 10) / 10
   const buckets = new Map<string, Bucket>()
@@ -149,7 +151,11 @@ export async function recordSimulation(root: Element, visible: [Element, Capture
       // structure, reported as children added/removed below.
       const textOnly = rec.type === 'childList' && [...Array.from(rec.addedNodes), ...Array.from(rec.removedNodes)].every((n) => n.nodeType === Node.TEXT_NODE)
       if (rec.type === 'characterData' || textOnly) track(el)
+      moved?.add(el)
       if (rec.type === 'characterData') continue
+      // Inline styles that scripts animate (GSAP, Motion) are only noted as moving by themselves; the
+      // style samples below describe the motion.
+      if (rec.attributeName === 'style') continue
       const target = label(el)
       if (rec.type === 'attributes' && rec.attributeName) {
         const next = el.getAttribute(rec.attributeName) ?? ''
@@ -169,7 +175,7 @@ export async function recordSimulation(root: Element, visible: [Element, Capture
     childList: true,
     attributes: true,
     attributeOldValue: true,
-    attributeFilter: WATCHED_ATTRS,
+    attributeFilter: [...WATCHED_ATTRS, 'style'],
     characterData: true,
   })
 

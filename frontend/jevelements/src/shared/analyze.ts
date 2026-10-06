@@ -11,7 +11,12 @@ export function captureForAnalysis(capture: Capture): Capture {
     lottie: capture.runtime.lottie.map((l) => ({ ...l, json: undefined })),
   }
   const scrollStory = capture.scrollStory && { ...capture.scrollStory, media: undefined }
-  const interactions = capture.interactions && { ...capture.interactions, media: undefined }
+  // Click states (layers) repeat the tree for every demo state; the main tree is enough to classify.
+  const interactions = capture.interactions && {
+    ...capture.interactions,
+    media: undefined,
+    items: capture.interactions.items.map((i) => ({ ...i, layers: undefined })),
+  }
   const slim: Capture = { ...capture, assets, runtime, scrollStory, interactions }
   delete slim.screenshot
   delete slim.fullScreenshot

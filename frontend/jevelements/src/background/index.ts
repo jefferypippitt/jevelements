@@ -53,6 +53,28 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (command === 'toggle-inspector' && tab) void toggleInspector(tab)
 })
 
+// The drawer lives in the page, so a page load mid-capture takes it (and the capture) with it. While a
+// capture runs, its tab is marked in session storage; when that tab finishes loading a page, the
+// content script there is told. If it's still the capturing page (a same-document route change), it
+// ignores the message; otherwise it opens the drawer to say what happened, and clears the mark.
+const capturingKey = (tabId: number) => `capturing:${tabId}`
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== 'complete') return
+  void (async () => {
+    const key = capturingKey(tabId)
+    const { [key]: from } = await chrome.storage.session.get(key)
+    if (typeof from !== 'string') return
+    try {
+      await sendToInspector(tabId, { type: 'jev:interrupted', from, to: tab.url ?? '' })
+    } catch {
+      await chrome.storage.session.remove(key) // a page extensions can't run on: nothing to tell
+    }
+  })()
+})
+
+chrome.tabs.onRemoved.addListener((tabId) => void chrome.storage.session.remove(capturingKey(tabId)))
+
 chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendResponse: (res: Reply) => void) => {
   const reply = (work: Promise<Reply>) => {
     work.then(sendResponse, (err) => sendResponse({ error: errorText(err) }))
@@ -77,6 +99,13 @@ chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendRe
           .executeScript({ target: { tabId, frameIds: [sender.frameId ?? 0] }, world: 'MAIN', files: ['probe.js'] })
           .then(() => true, () => false),
       )
+    }
+    case 'jev:capturing': {
+      const tabId = sender.tab?.id
+      if (tabId === undefined) return false
+      const key = capturingKey(tabId)
+      const work = message.active ? chrome.storage.session.set({ [key]: sender.tab?.url ?? '' }) : chrome.storage.session.remove(key)
+      return reply(work.then(() => true))
     }
     default: {
       const unhandled: never = message

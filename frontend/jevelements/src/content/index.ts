@@ -15,5 +15,6 @@ if (!window.__jevInspector) {
 
   chrome.runtime.onMessage.addListener((message: ContentMessage) => {
     if (message.type === 'jev:toggle') inspector.toggle()
+    else if (message.type === 'jev:interrupted') inspector.interrupted(message.from, message.to)
   })
 }

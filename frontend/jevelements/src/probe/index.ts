@@ -3,10 +3,12 @@
 // contexts or three.js renderers. Pages that loaded before the extension get it injected on demand,
 // without the hook data. The content script asks it about a section with a "jev:inspect" event.
 import type { RuntimeData } from '../shared/types'
-import { PROBE_ACK_EVENT, PROBE_INSPECT_EVENT, PROBE_RESULT_EVENT } from '../shared/runtime'
+import { PROBE_ACK_EVENT, PROBE_INSPECT_EVENT, PROBE_MARK_ATTR, PROBE_MARK_EVENT, PROBE_RESULT_EVENT } from '../shared/runtime'
+import { installClock } from './clock'
+import { installNavigationGuard } from './guard'
 import { installHooks, type HookState } from './hooks'
 import { inspectRuntime } from './inspect'
-import { hookListeners } from './listeners'
+import { hookListeners, markHandlers } from './listeners'
 
 const KEY = '__jevProbe'
 
@@ -16,7 +18,13 @@ if (!(KEY in window)) {
   performance.setResourceTimingBufferSize(3000)
   const state: HookState = installHooks(document.readyState !== 'loading')
   hookListeners()
+  installClock()
+  installNavigationGuard()
   Object.defineProperty(window, KEY, { value: true })
+
+  document.addEventListener(PROBE_MARK_EVENT, () => {
+    document.querySelectorAll(`[${PROBE_MARK_ATTR}]`).forEach(markHandlers)
+  })
 
   document.addEventListener(PROBE_INSPECT_EVENT, (e) => {
     const id = (e as CustomEvent<unknown>).detail

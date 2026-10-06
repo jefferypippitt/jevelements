@@ -1,6 +1,6 @@
 // Answers the content script's "jev:inspect": everything the page's JavaScript knows about the marked
 // section. three.js scenes and raw WebGL uniforms are sampled over a short window to see what animates.
-import type { LottieData, RuntimeData, WebGLData } from '../shared/types'
+import type { Library, LottieData, PhysicsWorld, RuntimeData, WebGLData } from '../shared/types'
 import { label } from '../shared/dom'
 import { PROBE_ROOT_ATTR } from '../shared/runtime'
 import { literal, round } from './format'
@@ -8,7 +8,9 @@ import { describeGsap } from './gsap'
 import type { HookState, UniformRecord } from './hooks'
 import { detectLibraries } from './libraries'
 import { markInteractive } from './listeners'
+import { describePhysics } from './physics'
 import { beginThree, type ThreeSession } from './three'
+import { describeTransitions } from './transitions'
 
 const SAMPLE_MS = 600
 const MAX_LOTTIE_JSON = 5_000_000
@@ -130,6 +132,24 @@ function describeWebGL(canvas: HTMLCanvasElement, state: HookState, before: Map<
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const PHYSICS_LIBRARY: Record<PhysicsWorld['engine'], string> = {
+  matter: 'Matter.js',
+  cannon: 'cannon-es',
+  rapier: 'Rapier',
+}
+
+function withPhysicsLibraries(libraries: Library[], physics: PhysicsWorld[]): Library[] {
+  const names = new Set(libraries.map((library) => library.name))
+  const extra: Library[] = []
+  for (const world of physics) {
+    const name = PHYSICS_LIBRARY[world.engine]
+    if (names.has(name)) continue
+    names.add(name)
+    extra.push({ name })
+  }
+  return extra.length ? [...libraries, ...extra] : libraries
+}
+
 export async function inspectRuntime(state: HookState): Promise<RuntimeData> {
   const root = document.querySelector(`[${PROBE_ROOT_ATTR}]`) ?? document.documentElement
   const canvases = [root, ...Array.from(root.querySelectorAll('canvas'))].filter((c): c is HTMLCanvasElement => c instanceof HTMLCanvasElement)
@@ -143,13 +163,17 @@ export async function inspectRuntime(state: HookState): Promise<RuntimeData> {
   if (sessions.length || rawCanvases.length) await sleep(SAMPLE_MS)
   const seconds = Math.max(0.05, (performance.now() - started) / 1000)
   markInteractive(root)
+  const physics = describePhysics(root)
+  const transitions = describeTransitions(root)
 
   return {
-    libraries: detectLibraries(),
+    libraries: withPhysicsLibraries(detectLibraries(), physics),
     three: sessions.map((s) => s.finish()),
     webgl: rawCanvases.map((c) => describeWebGL(c, state, before.get(c) ?? new Map(), seconds)),
     gsap: describeGsap(root, canvases.length > 0),
     lottie: describeLottie(root),
+    physics: physics.length ? physics : undefined,
+    transitions: transitions.length ? transitions : undefined,
     smoothScroll: describeSmoothScroll(),
     lateProbe: state.late,
     workers: state.workers,

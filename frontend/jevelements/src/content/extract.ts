@@ -141,6 +141,7 @@ const OWN = [
   'animation-timeline',
   'animation-range',
   'view-timeline-name',
+  'view-transition-name',
   'scroll-timeline-name',
   'filter',
   'backdrop-filter',
@@ -456,7 +457,7 @@ function roundBox(rect: DOMRect, originX: number, originY: number): Box {
 const NO_BOX: Box = { x: 0, y: 0, w: 0, h: 0 }
 
 // Children as rendered: through open and closed shadow roots, and into slotted content.
-function childrenOf(el: Element): Element[] {
+export function childrenOf(el: Element): Element[] {
   if (el instanceof HTMLSlotElement) {
     const assigned = el.assignedElements({ flatten: true })
     return assigned.length ? assigned : Array.from(el.children)
@@ -1400,6 +1401,71 @@ function walk(el: Element, parentCs: CSSStyleDeclaration | null, ctx: WalkContex
   return node
 }
 
+const LAYER_NODES = 300 // per alternate-state tree (Interaction.layers)
+
+// Reads a region of the section again after a click replaced its content (a mock UI switching
+// conversations, a tab panel React renders on demand): the same walk as the main tree, with the main
+// capture's stylesheet scan and a smaller node budget.
+export class LayerReader {
+  private defaults = new DefaultStyles()
+  private base: WalkContext
+  // Inline SVG markup → the "SVG #n" the prompt lists it under. The media log keeps one asset per
+  // markup, so an icon a layer draws again keeps the number it got first.
+  private svgs = new Map<string, string>()
+
+  constructor(base: WalkContext) {
+    this.base = base
+    for (const a of base.assets) if (a.kind === 'svg' && !this.svgs.has(a.src)) this.svgs.set(a.src, a.target)
+  }
+
+  // The main tree's node for an element of the section, when the main walk reached it.
+  nodeOf(el: Element): CapturedNode | undefined {
+    return this.base.visible.find(([e]) => e === el)?.[1]
+  }
+
+  // `budget`: nodes for this tree. A whole component in one of its states (states.ts) gets more than
+  // the region a single click changed.
+  read(el: Element, budget = LAYER_NODES): { tree: CapturedNode; assets: Asset[] } | null {
+    const rect = this.base.root.getBoundingClientRect()
+    const ctx: WalkContext = {
+      ...this.base,
+      originX: rect.left,
+      originY: rect.top,
+      count: MAX_NODES - budget,
+      hiddenCount: 0,
+      truncated: false,
+      defaults: this.defaults,
+      assets: [],
+      embeds: [],
+      embedHosts: new WeakSet(),
+      families: new Map(),
+      animationNames: new Set(),
+      visible: [],
+    }
+    const parent = el.parentElement
+    const tree = walk(el, parent ? getComputedStyle(parent) : null, ctx)
+    this.base.svgCount = ctx.svgCount // "inline SVG #n" stays unique across the main tree and every layer
+    if (!tree) return null
+    const markup = new Map(ctx.assets.filter((a) => a.kind === 'svg').map((a) => [a.target, a.src]))
+    const rename = (node: CapturedNode) => {
+      const n = node.note?.match(/^inline SVG #(\d+)/)?.[1]
+      const src = n && markup.get(`SVG #${n}`)
+      if (src) {
+        const known = this.svgs.get(src)
+        if (known) node.note = node.note!.replace(/^inline SVG #\d+/, `inline ${known}`)
+        else this.svgs.set(src, `SVG #${n}`)
+      }
+      node.children.forEach(rename)
+    }
+    rename(tree)
+    return { tree, assets: ctx.assets.filter((a) => a.kind !== 'svg' || this.svgs.get(a.src) === a.target) }
+  }
+
+  dispose() {
+    this.defaults.dispose()
+  }
+}
+
 function collectFonts(families: Map<string, FontUsage>, scan: SheetScan): FontInfo[] {
   const links = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"][href]'))
     .map((l) => l.href)
@@ -1446,7 +1512,8 @@ export interface CaptureResult {
   capture: Capture
   // Scrolls the section through the viewport and adds `scroll` lines to the nodes that change.
   recordScroll: (options?: ScrollOptions) => Promise<ScrollStory | null>
-  // Hovers and clicks the section's interactive elements and records what they change.
+  // Hovers and clicks the section's interactive elements and records what they change, including the
+  // alternate states (layers) clicks bring up.
   recordInteractions: (options?: InteractionOptions) => Promise<InteractionReport>
 }
 
@@ -1486,7 +1553,8 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
     const tree = walk(root, null, ctx)!
     const animations = collectScriptAnimations(root)
     onPhase?.('watching')
-    const simulation = await recordSimulation(root, ctx.visible, textLog)
+    const moved = new Set<Element>() // changed by itself during the idle watch
+    const simulation = await recordSimulation(root, ctx.visible, textLog, moved)
 
     const authored: string[] = []
     const gather = (n: CapturedNode) => {
@@ -1495,8 +1563,24 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
     }
     gather(tree)
 
-    // De-duplicate assets by kind + src.
-    const assets = Array.from(new Map(ctx.assets.filter((a) => a.src).map((a) => [a.kind + a.src, a])).values())
+    // De-duplicate assets by kind + src, keeping the first. An inline SVG drawn again (the same icon on
+    // three buttons) is referred to by the number it got first, the one that stays listed.
+    const firstSvg = new Map<string, string>()
+    for (const a of ctx.assets) if (a.kind === 'svg' && !firstSvg.has(a.src)) firstSvg.set(a.src, a.target)
+    const svgSrc = new Map(ctx.assets.filter((a) => a.kind === 'svg').map((a) => [a.target, a.src]))
+    const renumber = (node: CapturedNode) => {
+      const n = node.note?.match(/^inline SVG #(\d+)/)?.[1]
+      const first = n ? firstSvg.get(svgSrc.get(`SVG #${n}`) ?? '') : undefined
+      if (first && first !== `SVG #${n}`) node.note = node.note!.replace(/^inline SVG #\d+/, `inline ${first}`)
+      node.children.forEach(renumber)
+    }
+    renumber(tree)
+    const listed = new Set<string>()
+    const assets = ctx.assets.filter((a) => {
+      if (!a.src || listed.has(a.kind + a.src)) return false
+      listed.add(a.kind + a.src)
+      return true
+    })
 
     const capture: Capture = {
       id: crypto.randomUUID(),
@@ -1523,7 +1607,14 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
     return {
       capture,
       recordScroll: (options) => recordScrollMotion(root, ctx.visible, options),
-      recordInteractions: (options) => recordInteractions(root, ctx.visible, hoverRules, options),
+      recordInteractions: async (options) => {
+        const layers = new LayerReader(ctx)
+        try {
+          return await recordInteractions(root, ctx.visible, hoverRules, layers, options, moved)
+        } finally {
+          layers.dispose()
+        }
+      },
     }
   } finally {
     defaults.dispose()

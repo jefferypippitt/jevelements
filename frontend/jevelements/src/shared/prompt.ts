@@ -2,7 +2,7 @@
 // Every section is markdown: headings, lists, and fenced code. This runs locally today;
 // the backend LLM can later refine or replace it using the same Capture JSON.
 import { componentNames, kitBase, projectName } from './kit'
-import type { Asset, Capture, CapturedNode, CodeRef, Interaction, SectionAnalysis, ShaderSource, TextAnimation } from './types'
+import type { Asset, Capture, CapturedNode, CodeRef, ComponentStates, Interaction, PageTransition, PhysicsWorld, SectionAnalysis, ShaderSource, TextAnimation } from './types'
 
 // The rebuild always happens in its own Next.js app (App Router, TypeScript, Tailwind CSS): the
 // <name>.zip the extension downloads, with the saved files in public/ (see Capture.project). The
@@ -254,10 +254,14 @@ ${capture.responsive.map((r) => `${r.media} {\n  ${r.selector} { ${r.declaration
   if (scroll) sections.push(swap(scroll))
   const interactions = interactionsSection(capture)
   if (interactions) sections.push(swap(interactions))
+  const transitions = transitionSection(capture)
+  if (transitions) sections.push(transitions)
   const lottie = lottieSection(capture, plan)
   if (lottie) sections.push(lottie)
   const webgl = webglSection(capture, ref)
   if (webgl) sections.push(webgl)
+  const physics = physicsSection(capture)
+  if (physics) sections.push(physics)
 
   if (capture.embeds.length) {
     sections.push(`## Canvas, WebGL & embeds
@@ -311,8 +315,12 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
   if (readGl.size) caveats.push('WebGL data comes from the running page: values driven by the mouse or scroll are as they were at capture time.')
   if (capture.simulation && !capture.simulation.idle) caveats.push('Scripted changes during the idle watch are listed under Recorded simulation. Replay that timeline; the tree alone is the first frame.')
   if (capture.scrollRecorded) caveats.push('Scroll-linked changes were recorded by scrolling down only, after the section sat still. Whether a reveal reverses when scrolling back up was not tested: keep it played.')
-  if (capture.interactions) caveats.push("Hovers and clicks were played with synthetic events. During hovers the site's CSS :hover rules were applied too, so pure-CSS hovers on buttons, links and cards appear under **Interactions** as well as in the tree's state lines. Drag, swipe, long-press and keyboard-only interactions were not played.")
-  else caveats.push('Hover-only and click-only motion was not played.')
+  if (capture.interactions) {
+    const sweep = capture.interactions.tested.pointer
+      ? 'A pointer sweep crossed the section; those samples are under **Pointer**.'
+      : 'The pointer was not swept across the section.'
+    caveats.push(`Hovers and clicks were played with synthetic events. During hovers the site's CSS :hover rules were applied too, so pure-CSS hovers on buttons, links and cards appear under **Interactions** as well as in the tree's state lines. Only tabs, disclosures (accordions, dropdowns), menus and the controls of mock UIs (product demos hidden from assistive tech) were clicked: other buttons and links were hovered, never clicked, so what they do on click (open a page, a dialog) was not recorded. ${sweep} Drag-and-drop, swipe, long-press and keyboard-only interactions were not played.`)
+  } else caveats.push('Hover-only and click-only motion was not played.')
   const saved = capture.saved
   if (saved?.failed.length) caveats.push(`${saved.failed.length} file(s) could not be fetched while capturing, so they aren't in \`public/capture/\`. For each one, crop that area out of the screenshot and use it at the same size (not a gray box or stock image), and tell the user which file is missing: ${saved.failed.slice(0, 5).map((f) => `${f.src.startsWith('data:') ? 'inline data' : f.src.slice(0, 120)} (${f.reason})`).join('; ')}`)
   sections.push(`## Capture caveats\n${caveats.map((c) => `- ${c}`).join('\n')}`)
@@ -517,12 +525,62 @@ function scrollSection(capture: Capture): string | null {
   return lines.join('\n\n')
 }
 
+function fence(source: string): string {
+  const run = source.match(/`+/g)?.reduce((max, marks) => Math.max(max, marks.length), 0) ?? 0
+  const ticks = '`'.repeat(Math.max(3, run + 1))
+  return `${ticks}js\n${source}\n${ticks}`
+}
+
+function physicsHow(engine: PhysicsWorld['engine']): string {
+  switch (engine) {
+    case 'matter':
+      return 'Rebuild it with the `matter-js` package. Create one engine, set `world.gravity` to the value below, and add one body per line. Where a line names an element, write that element\'s transform from the body on every frame (`translate` to `position`, `rotate` to `angle`). That transform is the motion.'
+    case 'cannon':
+      return 'Rebuild it with `cannon-es`. Step the world in the same loop that renders the three.js scene, and match each body to the mesh with the same position.'
+    case 'rapier':
+      return 'Rebuild it with `@dimforge/rapier3d-compat` when positions have a z, or `@dimforge/rapier2d-compat` when they don\'t. Step the world in the same loop that renders the three.js scene, and match each body to the mesh with the same position.'
+    default: {
+      const exhaustive: never = engine
+      return exhaustive
+    }
+  }
+}
+
+function physicsSection(capture: Capture): string | null {
+  const worlds = capture.runtime?.physics
+  if (!worlds?.length) return null
+  const blocks = worlds.map((world) => {
+    const lines = [`### ${world.engine}`, physicsHow(world.engine), `Gravity: \`${world.gravity}\`.`]
+    if (world.note) lines.push(world.note)
+    if (world.bodies.length) lines.push(`**Bodies**\n${world.bodies.map((body) => `- ${body}`).join('\n')}`)
+    if (world.constraints.length) lines.push(`**Constraints**\n${world.constraints.map((constraint) => `- ${constraint}`).join('\n')}`)
+    if (world.mouse) lines.push(`**Mouse:** ${world.mouse}`)
+    return lines.join('\n\n')
+  })
+  return `## Physics (read from the running world)\nThe positions below are one moment in the simulation. Keep stepping the solver after capture.\n\n${blocks.join('\n\n')}`
+}
+
+function transitionSection(capture: Capture): string | null {
+  const items = capture.runtime?.transitions
+  if (!items?.length) return null
+  const blocks = items.map((item) => describeTransition(item))
+  return `## Page transitions\nThese run while one page replaces another. Recreate each one when navigation happens. A parallel transition keeps the outgoing and incoming pages on screen together. Stairs and pixel transitions are whatever the leave and enter code draws.\n\n${blocks.join('\n\n')}`
+}
+
+function describeTransition(item: PageTransition): string {
+  const lines = [`### ${item.library}`, item.summary]
+  if (item.steps.length) lines.push(item.steps.map((step) => `- ${step}`).join('\n'))
+  for (const entry of item.code ?? []) lines.push(`**${entry.label}**`, fence(entry.source))
+  return lines.join('\n\n')
+}
+
 function interactionsSection(capture: Capture): string | null {
   const report = capture.interactions
-  if (!report || (!report.tested.hover && !report.tested.click)) return null
+  if (!report || (!report.tested.hover && !report.tested.click && !report.tested.pointer)) return null
+  const swept = report.tested.pointer ? ', and swept the pointer across the section' : ''
   const lines = [
-    '## Interactions (hover & click, played on the live page)',
-    `JevElements hovered ${report.tested.hover} and clicked ${report.tested.click} element(s) in the section with real pointer-event sequences (pointerover/enter, move, down, up, click) and recorded what changed. Each hover also applied the site's CSS \`:hover\` rules, so buttons, links and cards with pure-CSS hovers are listed here with their transitions. \`:focus\` effects are only the state lines in the tree (\`:focus — …\`). Implement both.`,
+    '## Interactions (hover, click & pointer, played on the live page)',
+    `JevElements hovered ${report.tested.hover} and clicked ${report.tested.click} element(s)${swept} with real pointer-event sequences (pointerover/enter, move, down, up, click) and recorded what changed. Each hover also applied the site's CSS \`:hover\` rules, so buttons, links and cards with pure-CSS hovers are listed here with their transitions. \`:focus\` effects are only the state lines in the tree (\`:focus — …\`). Implement both.`,
   ]
   const render = (i: Interaction) => {
     const head = `- **${i.kind}** \`${i.target}\`${i.text ? ` "${i.text}"` : ''}${i.similar ? ` (and ${i.similar} more that look the same: give them the same behaviour)` : ''} · ${i.signal}${i.restored ? '' : ' · did not fully undo (later entries started from the changed state)'}`
@@ -531,6 +589,12 @@ function interactionsSection(capture: Capture): string | null {
     if (i.appeared.length) block.push(`  - Appeared (build it, hidden until this ${i.kind}):\n${i.appeared.map((c) => `    - ${c}`).join('\n')}`)
     if (i.disappeared.length) block.push(`  - Disappeared:\n${i.disappeared.map((c) => `    - ${c}`).join('\n')}`)
     if (i.animations.length) block.push(`  - Motion (use these durations and easings):\n${i.animations.map((c) => `    - ${c}`).join('\n')}`)
+    for (const p of i.phases ?? []) {
+      const step = [...p.changes.map((c) => `    - ${c}`), ...p.appeared.map((c) => `    - appeared: ${c}`)]
+      block.push(`  - Then, ${p.at}ms after the click:\n${step.join('\n')}`)
+    }
+    if (i.layers?.length) block.push(`  - State it brings up: ${i.layers.map((l) => `\`${l.target}\``).join(', ')} (full tree under **Click states**)`)
+    if (i.state) block.push(`  - In \`${i.state.component}\`: ${i.state.from} → ${i.state.to} (see **Component states**)`)
     return block.join('\n')
   }
   const hovers = report.items.filter((i) => i.kind === 'hover')
@@ -538,11 +602,57 @@ function interactionsSection(capture: Capture): string | null {
   if (hovers.length) lines.push(`### Hover\nHover effects on buttons, cards and links (CSS \`:hover\` and script-driven). Build CSS ones with Tailwind \`hover:\` / \`group-hover:\` and the listed transition; revert them on pointer leave, with the same motion.\n${hovers.map(render).join('\n')}`)
   if (clicks.length) {
     lines.push(
-      `### Click\nWire each one up as a real control: buttons with \`aria-expanded\`/\`aria-controls\` for disclosures, \`role="tablist"/"tab"/"tabpanel"\` for tabs, focus handling and Escape-to-close for menus and dialogs. Content that appears is part of the section: build it from these outlines.\n${clicks.map(render).join('\n')}`,
+      `### Click\nWire each one up as a real control: buttons with \`aria-expanded\`/\`aria-controls\` for disclosures, \`role="tablist"/"tab"/"tabpanel"\` for tabs, focus handling and Escape-to-close for menus and dialogs. Content that appears is part of the section: build it from these outlines. Controls marked "mock UI" belong to a product demo drawn in markup: each one switches the demo to another state, and **Then** lines are the sequence that state plays (a reply streaming in, a tool running, a diff appearing), with the time after the click. Replay it with the same steps and timing (React state plus timeouts, or a small script of steps).\n${clicks.map(render).join('\n')}`,
+    )
+  }
+  const layered = clicks.filter((i) => i.layers?.length)
+  if (layered.length) {
+    const states = layered.flatMap((i) =>
+      (i.layers ?? []).map((l) => {
+        const tree: string[] = []
+        renderTree(l.tree, 0, tree, false)
+        return `#### After clicking \`${i.target}\`${i.text ? ` "${i.text}"` : ''}: \`${l.target}\`\n${tree.join('\n')}`
+      }),
+    )
+    lines.push(
+      `### Click states\nThe region each click changed, read in full after its sequence finished: the same kind of tree as the main one (boxes relative to the section). These are the section's other states. Render the one that matches the active control, sharing the components and styles of the initial state, and switch between them on click. Content in them is real content: don't replace it with placeholders.\n\n${states.join('\n\n')}`,
+    )
+  }
+  for (const component of report.components ?? []) {
+    if (component.states.length > 1) lines.push(componentStates(component))
+  }
+  const pointers = report.items.filter((item) => item.kind === 'pointer')
+  if (pointers.length) {
+    lines.push(
+      `### Pointer\nThe pointer moved across the section. A percentage is how far across its width the pointer was, measured from the left. Rebuild cursor-follow and mouse galleries from these samples. A shader that reads the mouse keeps doing that: its uniform is under **WebGL & 3D**.\n${pointers.map(render).join('\n')}`,
     )
   }
   if (!report.items.length) lines.push('None of them changed anything visible: any remaining hover and focus effects come from the CSS state lines in the tree.')
   if (report.skipped.length) lines.push(`Not clicked on purpose: ${report.skipped.join('; ')}. Build them as ordinary controls with the captured styles.`)
+  return lines.join('\n\n')
+}
+
+function componentStates(component: ComponentStates): string {
+  const { target, states, transitions } = component
+  const ownS0 = !!states[0]?.tree
+  const lines = [
+    `### Component states: \`${target}\``,
+    `\`${target}\` (${component.signal}) is one component with ${states.length} states, explored click by click, including the controls that only exist in a state another click brought up (an agent's tabs, a file tree, a nested panel). ${ownS0 ? 'S0 is where exploring started; its tree is below (the main tree caught the component at another moment).' : 'S0 is how it looks in the main tree.'} Build it as one component that keeps which state it shows (React state), renders every state below, and switches on these clicks. The states share their parent components (sidebar, tab strip, window chrome): keep those mounted and change what differs.`,
+    `Transitions:\n${transitions.map((t) => `- ${t.from} → ${t.to}: click ${t.control}`).join('\n')}`,
+    'Each state below is the whole component in that state (boxes relative to the section), with what an earlier state already showed folded away: "same as in …" is a part shown there unchanged (render that same part); "the same component as in …, with this text" is that component with other content (render it with this text, in this order); "unchanged element" is an element as it was there, with its children listed below it.',
+  ]
+  if (component.unexplored.length) lines.push(`Not explored (give them the behaviour of the controls next to them): ${component.unexplored.join('; ')}`)
+  if (!component.restored) lines.push('It did not get back to S0 at the end, so the main tree may show it in another state: S0 is still the state on first load.')
+  for (const state of states) {
+    if (!state.tree) continue
+    const tree: string[] = []
+    renderTree(state.tree, 0, tree, false)
+    for (const portal of state.portals ?? []) {
+      tree.push('Open over it, rendered on <body> outside the component (a portal: a menu, popover or dialog; position it with these boxes, relative to the section):')
+      renderTree(portal.tree, 0, tree, false)
+    }
+    lines.push(`#### ${state.id}: ${state.path.length ? state.path.join(' → ') : 'where exploring started'}\n${tree.join('\n')}`)
+  }
   return lines.join('\n\n')
 }
 

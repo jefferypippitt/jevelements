@@ -213,6 +213,7 @@ export class Inspector {
   private resultBody: HTMLDivElement | null = null
   private resultActions: HTMLDivElement | null = null
   private textLog: TextLog | null = null // text the page animates while the picker is open
+  private capturing = false
 
   constructor() {
     loadOverlayFont()
@@ -387,7 +388,50 @@ export class Inspector {
     this.showPanel([el('div', { className: 'markers' }, steps.map(statusMarker))])
   }
 
+  // The background worker marks the tab while a capture runs, so if the page goes away mid-capture
+  // the next page can say why the drawer vanished (see interrupted()).
   private async capture(target: Element) {
+    this.capturing = true
+    await this.markCapturing(true)
+    try {
+      await this.runCapture(target)
+    } finally {
+      this.capturing = false
+      void this.markCapturing(false)
+    }
+  }
+
+  private async markCapturing(active: boolean) {
+    const message: BackgroundMessage = { type: 'jev:capturing', active }
+    await askExtension(message)
+  }
+
+  // The tab loaded a new page while a capture was running on the previous one. This is the new page's
+  // inspector: the capture is gone with the old page, so say what happened and offer the way back.
+  interrupted(from: string, to: string) {
+    if (this.capturing) return // still the capturing page: a same-document route change
+    void this.markCapturing(false)
+    this.stop()
+    this.closePanel()
+    const where = (url: string) => {
+      try {
+        const u = new URL(url)
+        return u.host + u.pathname
+      } catch {
+        return url
+      }
+    }
+    const reloaded = from === to
+    const step: StatusStep = { label: reloaded ? 'Capture stopped: the page reloaded' : `Capture stopped: the page changed to ${where(to)}`, state: 'error' }
+    const note = reloaded
+      ? 'Reloading the page ends a capture that is running. Pick the section again.'
+      : `The capture of ${where(from)} was still running when the tab opened another page, which ends it. Go back and pick the section again.`
+    const goBack = !reloaded && button('primary', 'Go back', () => history.back())
+    const pick = button(reloaded ? 'primary' : 'outline', LABELS.newSection, () => this.start())
+    this.showPanel([el('div', { className: 'markers' }, [statusMarker(step)]), el('p', { className: 'note', textContent: note })], goBack ? [goBack, pick] : [pick])
+  }
+
+  private async runCapture(target: Element) {
     this.stop()
     const rect = target.getBoundingClientRect()
     const screenshot = await this.screenshot(target)
@@ -446,13 +490,16 @@ export class Inspector {
         progress('Playing hover & click')
         const report = await recordInteractions({
           onProgress: (done, total) => progress(`Playing hover & click (${done + 1}/${total})`),
+          onExplore: (component, states) => progress(`Exploring the states of ${component} (${states} found)`),
         })
         mergeAssets(capture, report.media ?? [])
         report.media = undefined
         capture.interactions = report
         const tested = report.tested.hover + report.tested.click
         const found = report.items.length
-        steps = [...played, { label: tested ? `Played ${tested} interaction${tested === 1 ? '' : 's'}, ${found} changed something` : 'No hover or click targets', state: 'done' }]
+        const states = (report.components ?? []).reduce((sum, c) => sum + c.states.length - 1, 0)
+        const explored = states ? `, ${states} component state${states === 1 ? '' : 's'}` : ''
+        steps = [...played, { label: tested ? `Played ${tested} interaction${tested === 1 ? '' : 's'}, ${found} changed something${explored}` : 'No hover or click targets', state: 'done' }]
         // Content revealed by clicks (tab panels, accordions) can bring its own images.
         mergeAssets(capture, collectSectionMedia(target))
       }
