@@ -204,7 +204,7 @@ The goal is a **pixel-accurate 1:1 clone**: the same structure, layout, dimensio
 - Page: ${capture.url}${capture.title ? ` ("${capture.title}")` : ''}
 - Captured element: \`${capture.selector}\` (\`<${root.tag}>\`)
 - Rendered size: **${root.box.w}×${root.box.h}px**, at a viewport of ${capture.viewport.w}×${capture.viewport.h}px (devicePixelRatio ${capture.viewport.dpr})
-- Screenshot: ${hasScreenshot ? `one, attached to this message${capture.project && capture.saved?.screenshot ? ` and saved as \`public/reference/${capture.saved.screenshot}\`` : ''}` : 'any image attached to this message'}. It is the section's initial look${capture.fullScreenshot ? ', the whole section top to bottom' : ''}: build to match it, and use it as the visual source of truth for anything this text spec does not cover. Scroll, hover and click states have no screenshots: build them from **Scroll story** and **Interactions**. The screenshot is reference only: do not render it in the section.`)
+- Screenshot: ${hasScreenshot ? `one, attached to this message${capture.project && capture.saved?.screenshot ? ` and saved as \`public/reference/${capture.saved.screenshot}\`` : ''}` : 'any image attached to this message'}. It is the section's initial look${capture.fullScreenshot ? ', the whole section top to bottom' : ''}: build to match it, and use it as the visual source of truth for anything this text spec does not cover. Scroll, hover and click states have no screenshots: build them from **Scroll story** and **Interactions**${hoverFrames(capture).length ? ', except the hover and click sweeps, whose frames are listed under **Pointer hover** and **Click sweep**' : ''}. The screenshot is reference only: do not render it in the section.`)
 
   if (capture.analysis) sections.push(capture.analysis.promptSection)
 
@@ -260,6 +260,10 @@ ${capture.responsive.map((r) => `${r.media} {\n  ${r.selector} { ${r.declaration
   if (lottie) sections.push(lottie)
   const webgl = webglSection(capture, ref)
   if (webgl) sections.push(webgl)
+  const hoverSweep = hoverSweepSection(capture)
+  if (hoverSweep) sections.push(hoverSweep)
+  const clickSweep = clickSweepSection(capture)
+  if (clickSweep) sections.push(clickSweep)
   const physics = physicsSection(capture)
   if (physics) sections.push(physics)
 
@@ -316,10 +320,10 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
   if (capture.simulation && !capture.simulation.idle) caveats.push('Scripted changes during the idle watch are listed under Recorded simulation. Replay that timeline; the tree alone is the first frame.')
   if (capture.scrollRecorded) caveats.push('Scroll-linked changes were recorded by scrolling down only, after the section sat still. Whether a reveal reverses when scrolling back up was not tested: keep it played.')
   if (capture.interactions) {
-    const sweep = capture.interactions.tested.pointer
-      ? 'A pointer sweep crossed the section; those samples are under **Pointer**.'
-      : 'The pointer was not swept across the section.'
-    caveats.push(`Hovers and clicks were played with synthetic events. During hovers the site's CSS :hover rules were applied too, so pure-CSS hovers on buttons, links and cards appear under **Interactions** as well as in the tree's state lines. Only tabs, disclosures (accordions, dropdowns), menus and the controls of mock UIs (product demos hidden from assistive tech) were clicked: other buttons and links were hovered, never clicked, so what they do on click (open a page, a dialog) was not recorded. ${sweep} Drag-and-drop, swipe, long-press and keyboard-only interactions were not played.`)
+    const sweep = capture.hoverSweep?.length
+      ? 'What follows the pointer was swept point by point; see **Pointer hover**.'
+      : 'Nothing was found to follow the pointer\'s position (or nothing listened for it).'
+    caveats.push(`Hovers and clicks were played with synthetic events. During hovers the site's CSS :hover rules were applied too, so pure-CSS hovers on buttons, links and cards appear under **Interactions** as well as in the tree's state lines. Only tabs, disclosures (accordions, dropdowns), menus, the controls of mock UIs (product demos hidden from assistive tech) and hidden clicks (scripted elements with no markup, played with server writes blocked) were clicked: other buttons and links were hovered, never clicked, so what they do on click (open a page, a dialog) was not recorded. ${sweep}${capture.clickSweep?.length ? ' Clicks where nothing is a control were swept too; see **Click sweep**.' : ''} Drag-and-drop, swipe, long-press and keyboard-only interactions were not played.`)
   } else caveats.push('Hover-only and click-only motion was not played.')
   const saved = capture.saved
   if (saved?.failed.length) caveats.push(`${saved.failed.length} file(s) could not be fetched while capturing, so they aren't in \`public/capture/\`. For each one, crop that area out of the screenshot and use it at the same size (not a gray box or stock image), and tell the user which file is missing: ${saved.failed.slice(0, 5).map((f) => `${f.src.startsWith('data:') ? 'inline data' : f.src.slice(0, 120)} (${f.reason})`).join('; ')}`)
@@ -433,6 +437,66 @@ function webglSection(capture: Capture, ref: (url: string) => string): string | 
     )
   }
   return parts.length ? `## WebGL & 3D (read from the running page)\n${parts.join('\n\n')}` : null
+}
+
+// Hover and click sweep frames that made it into the app zip (public/reference/).
+function hoverFrames(capture: Capture): string[] {
+  const uploaded = new Set(capture.saved?.uploaded ?? [])
+  const frames = [...(capture.hoverSweep ?? []), ...(capture.clickSweep ?? [])].flatMap((h) => h.frames)
+  return frames.map((f) => f.file).filter((f): f is string => !!f && uploaded.has(`reference/${f}`))
+}
+
+function clickSweepSection(capture: Capture): string | null {
+  const clicks = capture.clickSweep ?? []
+  if (!clicks.length) return null
+  const uploaded = new Set(capture.saved?.uploaded ?? [])
+  const parts = clicks.map((c) => {
+    const noun = c.kind
+    const lines = [`### \`${c.target}\` (${noun === 'canvas' ? 'a canvas' : "the section's background"}) [${c.box.w}×${c.box.h}]`, `Clicked: ${c.swept}. Values: ${c.values}. Pixels: ${c.measured}.`]
+    if (c.reactions.length) lines.push(`**What a click changes**:\n${c.reactions.map((l) => `- ${l}`).join('\n')}`)
+    if (c.added.length) lines.push(`**What a click adds** (build it as an element spawned at the click, with the same lifetime):\n${c.added.map((l) => `- ${l}`).join('\n')}`)
+    if (c.map?.length) {
+      lines.push(
+        `**Where clicks react**: how much the pixels changed at the peak of a click at each point of the grid (█ most, ▓ ▒ ░ less, ·· nothing, ×× left out: a control is there; rows by how far down the ${noun}, columns left to right):\n\`\`\`text\n${c.map.join('\n')}\n\`\`\``,
+      )
+    }
+    if (c.hotspots.length) lines.push(`**Strongest reactions**:\n${c.hotspots.map((l) => `- ${l}`).join('\n')}`)
+    const frames = c.frames.filter((f) => f.file && uploaded.has(`reference/${f.file}`))
+    if (frames.length) lines.push(`**Frames** (in \`public/reference/\`, the ${noun} alone):\n${frames.map((f) => `- \`${f.file}\`: ${f.caption}`).join('\n')}`)
+    if (c.notes.length) lines.push(c.notes.join(' '))
+    return lines.join('\n\n')
+  })
+  return `## Click sweep (clicked where nothing is a control)
+Clicking these where no link, button or other control is reacts: a ripple or a burst at the click, an object picked on a canvas, a background that changes. Each was clicked at a grid of points with navigation and server writes blocked, and every click followed frame by frame. Rebuild the same: listen for the click (or pointerdown) where the original does, at the same place in the page, and do what is listed: set the same values, spawn the same elements at the click point for as long as listed, toggle or count the same way. A position is a percentage of the clicked box from its top-left corner.
+
+${parts.join('\n\n')}`
+}
+
+function hoverSweepSection(capture: Capture): string | null {
+  const hovers = capture.hoverSweep ?? []
+  if (!hovers.length) return null
+  const uploaded = new Set(capture.saved?.uploaded ?? [])
+  const parts = hovers.map((h) => {
+    const noun = h.kind
+    const lines = [`### \`${h.target}\` (${noun === 'canvas' ? 'a canvas' : 'the section'}) [${h.box.w}×${h.box.h}]`, `Swept with ${h.swept}. Values: ${h.values}. Pixels: ${h.measured}.`]
+    if (h.pointer.length) lines.push(`**Values that follow the pointer**:\n${h.pointer.map((l) => `- ${l}`).join('\n')}`)
+    if (h.idle.length) lines.push(`Values that change by themselves, not with the pointer: ${h.idle.join(', ')}.`)
+    if (h.motion.length) lines.push(`**Motion**:\n${h.motion.map((l) => `- ${l}`).join('\n')}`)
+    if (h.map?.length) {
+      lines.push(
+        `**Where it reacts**: how much the pixels changed with the pointer held in each cell of the grid, against the ${noun} at rest (█ most, ▓ ▒ ░ less, blank none; rows by how far down the ${noun}, columns left to right):\n\`\`\`text\n${h.map.join('\n')}\n\`\`\``,
+      )
+    }
+    if (h.hotspots.length) lines.push(`**Strongest reactions**:\n${h.hotspots.map((l) => `- ${l}`).join('\n')}`)
+    const frames = h.frames.filter((f) => f.file && uploaded.has(`reference/${f.file}`))
+    if (frames.length) lines.push(`**Frames** (in \`public/reference/\`, the ${noun} alone; compare your rebuild against each one with the pointer in the same place):\n${frames.map((f) => `- \`${f.file}\`: ${f.caption}`).join('\n')}`)
+    if (h.notes.length) lines.push(h.notes.join(' '))
+    return lines.join('\n\n')
+  })
+  return `## Pointer hover (the pointer swept over the section)
+These follow the pointer's position, not just whether it is over them: a shader, a spotlight, a cursor follower, parallax layers, a tilt, a magnetic pull. Each was swept with a virtual pointer: held at a grid of points (finer where it reacted most) until it settled, with its values and pixels read at each point. Rebuild it with the same input: listen where the original does (usually \`pointermove\` on \`window\`, converted to the element's coordinates as described), drive the same values (shader uniforms, or the transforms and CSS custom properties listed) with the same mapping and easing, and reproduce the same reaction in the same places, including on pointer leave. For a canvas whose values weren't readable, take the input from **Canvas source code** and match the map, the strongest reactions and the frames. Element names are as in the tree. A position is a percentage of the swept box from its top-left corner.
+
+${parts.join('\n\n')}`
 }
 
 function gsapSection(capture: Capture): string | null {
@@ -576,11 +640,10 @@ function describeTransition(item: PageTransition): string {
 
 function interactionsSection(capture: Capture): string | null {
   const report = capture.interactions
-  if (!report || (!report.tested.hover && !report.tested.click && !report.tested.pointer)) return null
-  const swept = report.tested.pointer ? ', and swept the pointer across the section' : ''
+  if (!report || (!report.tested.hover && !report.tested.click)) return null
   const lines = [
-    '## Interactions (hover, click & pointer, played on the live page)',
-    `JevElements hovered ${report.tested.hover} and clicked ${report.tested.click} element(s)${swept} with real pointer-event sequences (pointerover/enter, move, down, up, click) and recorded what changed. Each hover also applied the site's CSS \`:hover\` rules, so buttons, links and cards with pure-CSS hovers are listed here with their transitions. \`:focus\` effects are only the state lines in the tree (\`:focus — …\`). Implement both.`,
+    '## Interactions (hover & click, played on the live page)',
+    `JevElements hovered ${report.tested.hover} and clicked ${report.tested.click} element(s) with real pointer-event sequences (pointerover/enter, move, down, up, click) and recorded what changed. Each hover also applied the site's CSS \`:hover\` rules, so buttons, links and cards with pure-CSS hovers are listed here with their transitions. \`:focus\` effects are only the state lines in the tree (\`:focus — …\`). Implement both.`,
   ]
   const render = (i: Interaction) => {
     const head = `- **${i.kind}** \`${i.target}\`${i.text ? ` "${i.text}"` : ''}${i.similar ? ` (and ${i.similar} more that look the same: give them the same behaviour)` : ''} · ${i.signal}${i.restored ? '' : ' · did not fully undo (later entries started from the changed state)'}`
@@ -602,7 +665,7 @@ function interactionsSection(capture: Capture): string | null {
   if (hovers.length) lines.push(`### Hover\nHover effects on buttons, cards and links (CSS \`:hover\` and script-driven). Build CSS ones with Tailwind \`hover:\` / \`group-hover:\` and the listed transition; revert them on pointer leave, with the same motion.\n${hovers.map(render).join('\n')}`)
   if (clicks.length) {
     lines.push(
-      `### Click\nWire each one up as a real control: buttons with \`aria-expanded\`/\`aria-controls\` for disclosures, \`role="tablist"/"tab"/"tabpanel"\` for tabs, focus handling and Escape-to-close for menus and dialogs. Content that appears is part of the section: build it from these outlines. Controls marked "mock UI" belong to a product demo drawn in markup: each one switches the demo to another state, and **Then** lines are the sequence that state plays (a reply streaming in, a tool running, a diff appearing), with the time after the click. Replay it with the same steps and timing (React state plus timeouts, or a small script of steps).\n${clicks.map(render).join('\n')}`,
+      `### Click\nWire each one up as a real control: buttons with \`aria-expanded\`/\`aria-controls\` for disclosures, \`role="tablist"/"tab"/"tabpanel"\` for tabs, focus handling and Escape-to-close for menus and dialogs. Content that appears is part of the section: build it from these outlines. Controls marked "mock UI" belong to a product demo drawn in markup: each one switches the demo to another state, and **Then** lines are the sequence that state plays (a reply streaming in, a tool running, a diff appearing), with the time after the click. Replay it with the same steps and timing (React state plus timeouts, or a small script of steps). Controls marked "hidden click" have nothing in their markup that says they're clickable (a delegated or scripted handler on a card, a row, a tile): build them as real controls anyway (a \`<button>\`, or \`role="button"\` with \`tabIndex={0}\` and Enter/Space), with the same effect. A hidden click that tried to write to the server was blocked while capturing, so what it would have loaded is missing: keep its visible effect and leave the request out.\n${clicks.map(render).join('\n')}`,
     )
   }
   const layered = clicks.filter((i) => i.layers?.length)
@@ -621,12 +684,7 @@ function interactionsSection(capture: Capture): string | null {
   for (const component of report.components ?? []) {
     if (component.states.length > 1) lines.push(componentStates(component))
   }
-  const pointers = report.items.filter((item) => item.kind === 'pointer')
-  if (pointers.length) {
-    lines.push(
-      `### Pointer\nThe pointer moved across the section. A percentage is how far across its width the pointer was, measured from the left. Rebuild cursor-follow and mouse galleries from these samples. A shader that reads the mouse keeps doing that: its uniform is under **WebGL & 3D**.\n${pointers.map(render).join('\n')}`,
-    )
-  }
+  if (capture.hoverSweep?.length) lines.push('What follows the pointer\'s position (as opposed to these per-element hovers) is under **Pointer hover**.')
   if (!report.items.length) lines.push('None of them changed anything visible: any remaining hover and focus effects come from the CSS state lines in the tree.')
   if (report.skipped.length) lines.push(`Not clicked on purpose: ${report.skipped.join('; ')}. Build them as ordinary controls with the captured styles.`)
   return lines.join('\n\n')
@@ -825,6 +883,7 @@ function installSection(capture: Capture, kit: string, plan: MediaPlan): string 
     plan.archived.size ? `\`public/capture/\`: the ${plan.archived.size} file${plan.archived.size === 1 ? '' : 's'} the section shows (images, video, canvas snapshots, textures, models), downloaded from the live page` : '',
     shot ? `\`public/reference/${shot}\`: the screenshot attached to this message` : '',
     codeFiles ? `\`public/reference/code/\`: ${codeFiles} script${codeFiles === 1 ? '' : 's'} from the page with the canvas drawing code (see **Canvas source code**)` : '',
+    hoverFrames(capture).length ? `\`public/reference/hover-sweep-*.jpg\` and \`click-sweep-*.jpg\`: frames of the hover and click sweeps (see **Pointer hover** and **Click sweep**); reference only, like the screenshot` : '',
     '`PROMPT.md`: this prompt',
   ].filter(Boolean)
   return [

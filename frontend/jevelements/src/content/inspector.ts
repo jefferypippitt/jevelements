@@ -15,7 +15,9 @@ import { captureFullSection, initialShot, toPng, type Shot } from './frames'
 import OVERLAY_CSS from './overlay.css?inline'
 import { inspectRuntime } from './runtime'
 import { wantsScrollRecording } from './scroll'
+import { endClickSweep, endSweep, hasClickTargets, hasSweepTargets, sweepClicks, sweepHover } from './sweep'
 import { TextLog } from './timeline'
+import { Trace } from './trace'
 
 // Drawer motion. DRAWER_MS must match the .panel transition in overlay.css.
 const DRAWER_MS = 450
@@ -488,10 +490,20 @@ export class Inspector {
         const played = steps
         const progress = (text: string) => this.showStatus([...played, { label: text, state: 'active' }])
         progress('Playing hover & click')
+        // Pink rings on the page around what is being played, and around any popup it opens.
+        const trace = new Trace(this.shadow)
+        // States found beyond each component's first, counted across every component explored.
+        let earlier = 0
+        let current = 0
         const report = await recordInteractions({
           onProgress: (done, total) => progress(`Playing hover & click (${done + 1}/${total})`),
-          onExplore: (component, states) => progress(`Exploring the states of ${component} (${states} found)`),
-        })
+          onExplore: (_component, states) => {
+            if (states === 1) [earlier, current] = [earlier + current, 0] // the next component starts
+            else current = states - 1
+            progress(`Exploring the states (${earlier + current} found)`)
+          },
+          onFocus: (focus) => trace.show(focus),
+        }).finally(() => trace.stop())
         mergeAssets(capture, report.media ?? [])
         report.media = undefined
         capture.interactions = report
@@ -503,6 +515,53 @@ export class Inspector {
         // Content revealed by clicks (tab panels, accordions) can bring its own images.
         mergeAssets(capture, collectSectionMedia(target))
       }
+
+      // What follows the pointer's position (a shader, a spotlight, a cursor follower, parallax, a tilt)
+      // changes with every pixel the pointer moves, which hovering each control above can't see: the
+      // pointer is swept over each canvas, and over the section when the page listens for the pointer,
+      // with values and pixels read point by point. The trace shows it in green.
+      if (hasSweepTargets(target)) {
+        const before = steps
+        const progress = (text: string) => this.showStatus([...before, { label: text, state: 'active' }])
+        progress('Sweeping the pointer over the section')
+        const trace = new Trace(this.shadow)
+        const sweep = await sweepHover(target, {
+          shoot: (r) => this.shootHidden(r),
+          onProgress: progress,
+          onFocus: (focus) => trace.show(focus),
+        }).finally(() => trace.stop())
+        if (sweep.hovers.length) capture.hoverSweep = sweep.hovers
+        const reacted = sweep.hovers.length
+        const label = reacted
+          ? `Mapped the pointer hover on ${sweep.hovers.map((h) => h.target).join(', ')}`
+          : sweep.swept
+            ? 'Swept the pointer: nothing follows it'
+            : 'Off screen: pointer hover not swept'
+        steps = [...before, { label, state: 'done' }]
+      } else endSweep()
+
+      // Clicks where nothing is a control: a canvas (a ripple, a burst, picking an object) or the
+      // section's own background (click anywhere to change it). Clicked at a grid of points with
+      // navigation and server writes blocked; the trace shows it in amber.
+      if (hasClickTargets(target)) {
+        const before = steps
+        const progress = (text: string) => this.showStatus([...before, { label: text, state: 'active' }])
+        progress('Click sweep over the section')
+        const trace = new Trace(this.shadow)
+        const sweep = await sweepClicks(target, {
+          shoot: (r) => this.shootHidden(r),
+          onProgress: progress,
+          onFocus: (focus) => trace.show(focus),
+        }).finally(() => trace.stop())
+        if (sweep.clicks.length) capture.clickSweep = sweep.clicks
+        if (sweep.skipped.length && capture.interactions) capture.interactions.skipped.push(...sweep.skipped)
+        const label = sweep.clicks.length
+          ? `Mapped clicks on ${sweep.clicks.map((c) => c.target).join(', ')}`
+          : sweep.swept
+            ? 'Click sweep: clicking the free space does nothing'
+            : 'Click sweep skipped'
+        steps = [...before, { label, state: 'done' }]
+      } else endClickSweep(target)
 
       // Canvases drawn by code the capture couldn't watch (a Web Worker, or WebGL that started before
       // the probe): find that code in the page's scripts so the rebuild can port it.
@@ -591,6 +650,19 @@ export class Inspector {
       this.host.style.display = ''
     }
     return undefined
+  }
+
+  // A screenshot of a viewport rect with the overlay hidden just for it: the canvas sweep takes many,
+  // and the drawer stays up in between.
+  private async shootHidden(rect: { x: number; y: number; w: number; h: number }): Promise<string | undefined> {
+    this.host.style.display = 'none'
+    await nextFrame()
+    await nextFrame()
+    try {
+      return await this.shootRect(rect)
+    } finally {
+      this.host.style.display = ''
+    }
   }
 
   // One piece of the full-section screenshot (the caller hides the overlay for the whole run).

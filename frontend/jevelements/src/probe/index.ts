@@ -6,9 +6,11 @@ import type { RuntimeData } from '../shared/types'
 import { PROBE_ACK_EVENT, PROBE_INSPECT_EVENT, PROBE_MARK_ATTR, PROBE_MARK_EVENT, PROBE_RESULT_EVENT } from '../shared/runtime'
 import { installClock } from './clock'
 import { installNavigationGuard } from './guard'
+import { installWriteGuard } from './writes'
 import { installHooks, type HookState } from './hooks'
 import { inspectRuntime } from './inspect'
 import { hookListeners, markHandlers } from './listeners'
+import { answerValues } from './values'
 
 const KEY = '__jevProbe'
 
@@ -20,6 +22,8 @@ if (!(KEY in window)) {
   hookListeners()
   installClock()
   installNavigationGuard()
+  answerValues(state)
+  installWriteGuard()
   Object.defineProperty(window, KEY, { value: true })
 
   document.addEventListener(PROBE_MARK_EVENT, () => {

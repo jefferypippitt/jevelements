@@ -265,10 +265,10 @@ export interface ScrollStory {
 
 // ---------- interactions (src/content/interactions.ts) ----------
 // Hovers and clicks played on the live page with synthetic pointer events, and what they changed.
-// `pointer` is one sweep across the section when the page follows the mouse (a cursor gallery).
+// What follows the pointer's position is mapped by the hover sweep instead (HoverSweep).
 
 export interface Interaction {
-  kind: 'hover' | 'click' | 'pointer'
+  kind: 'hover' | 'click'
   target: string // element label, as in the tree
   text?: string // its visible text or aria-label
   similar: number // elements that look the same and weren't played (cards in a grid, carousel dots)
@@ -327,11 +327,61 @@ export interface InteractionPhase {
 }
 
 export interface InteractionReport {
-  tested: { hover: number; click: number; pointer: number }
+  tested: { hover: number; click: number }
   skipped: string[] // left alone on purpose: "button "Delete account" (destructive)"
   items: Interaction[] // only interactions that changed something
   components?: ComponentStates[] // components whose nested states were explored click by click
   media?: Asset[] // images and videos that hovers and clicks brought on screen; merged into Capture.assets
+}
+
+// ---------- hover sweep (src/content/sweep.ts) ----------
+// What follows the pointer's position, in a canvas (a shader, a 2D drawing) or in the section's own
+// elements (a cursor follower, a spotlight, parallax layers, tilt cards, a magnetic button): the
+// pointer was held at a grid of points over it (finer where it reacted most), and its values and its
+// pixels were read at each one. Positions are fractions of the swept box from its top-left corner,
+// written as percentages.
+
+export interface HoverSweepFrame {
+  caption: string // "pointer off the section", "pointer at 30% across, 62% down"
+  dataUrl?: string // JPEG; dropped once uploaded (media.ts)
+  file?: string // name in public/reference/
+}
+
+export interface HoverSweep {
+  kind: 'canvas' | 'section'
+  target: string // the canvas, or the section
+  box: { w: number; h: number }
+  values: string // where the values came from: the canvas's renderer, or the elements' styles
+  measured: string // how the pixels were read: "read back from the canvas itself", "cropped from screenshots of the tab", or not at all
+  swept: string // the grid, what part of the box it covered, and the finer points
+  pointer: string[] // values that follow the pointer, with how they map to its position
+  idle: string[] // values that change by themselves (time), so they aren't mistaken for the hover
+  motion: string[] // how they get there: easing after a move, on enter, on leave
+  map?: string[] // rows of the pixel-change heat map over the grid
+  hotspots: string[] // the points where the pixels changed most, and which part changed
+  frames: HoverSweepFrame[]
+  notes: string[]
+}
+
+// ---------- click sweep (src/content/sweep.ts) ----------
+// What a click does where nothing in the markup is a control: a canvas (a ripple, a burst of
+// particles, picking a 3D object) or the section's own background (click anywhere to change the color).
+// Clicked at a grid of points (never on links, buttons or other controls) with navigation and server
+// writes blocked, each click followed frame by frame.
+
+export interface ClickSweep {
+  kind: 'canvas' | 'section'
+  target: string
+  box: { w: number; h: number }
+  values: string // where the values came from, as in HoverSweep
+  measured: string // how the pixels were read
+  swept: string // how many clicks, where, and what was left out
+  reactions: string[] // values a click changes: set to the click point, a pulse, a counter, a toggle
+  added: string[] // elements a click adds (a ripple span), and how long they stay
+  map?: string[] // rows of the heat map: how much a click at each point changed the pixels
+  hotspots: string[]
+  frames: HoverSweepFrame[]
+  notes: string[]
 }
 
 // The files the rebuild gets in public/: the real images, videos, canvas snapshots, textures and models
@@ -371,6 +421,8 @@ export interface Capture {
   scrollRecorded?: boolean // nodes carry `scroll` lines from scrolling the section through the viewport
   scrollStory?: ScrollStory // the scroll recording grouped into phases
   interactions?: InteractionReport // hovers and clicks played on the live page
+  hoverSweep?: HoverSweep[] // canvases and the section, where they follow the pointer, swept point by point
+  clickSweep?: ClickSweep[] // canvases and the section's background, clicked point by point
   code?: CodeRef[] // the page's scripts that draw the section's canvases
   saved?: SavedFiles // media file names and screenshot names the prompt refers to
   project?: CaptureProject // the app zip the extension downloaded

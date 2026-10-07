@@ -29,6 +29,56 @@
 }
 .label .dim { opacity: 0.75; font-weight: 400; }
 
+/* ---------- trace: what a capture is playing (trace.ts) ----------
+   The picker's ring in pink: dashed around the section or component, solid around the control,
+   and around each popup the page opened while it's read. Below the drawer. */
+
+.trace-area, .trace, .trace-popup, .trace-label {
+  position: fixed; pointer-events: none; z-index: 2147483645; display: none;
+  transition: left 120ms ease-out, top 120ms ease-out, width 120ms ease-out, height 120ms ease-out;
+}
+.trace-area { border: 2px dashed color-mix(in oklab, var(--trace) 70%, transparent); border-radius: 4px; }
+.trace {
+  border: 2px solid var(--trace); border-radius: 3px;
+  background: color-mix(in oklab, var(--trace) 14%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--trace) 22%, transparent);
+  animation: trace-pulse 1.2s ease-in-out infinite;
+}
+/* A popup the page opened is covered, not changed: the capture still reads it as it is, the user sees
+   a frosted card instead. Under the rings, so a control behind a modal's backdrop still shows. */
+.trace-popup {
+  z-index: 2147483644; border: 2px solid var(--trace); border-radius: 6px;
+  display: none; align-items: center; justify-content: center;
+  background: color-mix(in oklab, var(--background) 82%, transparent);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+.trace-popup::after {
+  content: 'Reading popup';
+  font: 600 11px/1 var(--font-code); background: var(--trace); color: #fff; padding: 4px 6px; border-radius: 4px;
+}
+.trace-label {
+  font: 600 11px/1 var(--font-code); background: var(--trace); color: #fff; padding: 4px 6px; border-radius: 4px;
+  white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis;
+}
+/* The canvas sweep's virtual pointer: a dot where it is, centered on the point. No transition: it
+   should sit exactly where the events go. */
+.trace-dot {
+  position: fixed; pointer-events: none; z-index: 2147483646; display: none;
+  width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  background: var(--trace); border: 2px solid #fff;
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--trace) 30%, transparent);
+}
+/* The hover sweep in green and the click sweep in amber, apart from the pink hover & click pass. Every
+   trace rule colors through --trace, so swapping the token recolors the rings, label, popup covers
+   and dot. */
+.sweep { --trace: var(--trace-sweep); }
+.sweep-click { --trace: var(--trace-click); }
+@keyframes trace-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in oklab, var(--trace) 8%, transparent); } }
+@media (prefers-reduced-motion: reduce) {
+  .trace-area, .trace, .trace-popup, .trace-label { transition: none; }
+  .trace { animation: none; }
+}
+
 /* The one floating toolbar while picking: brand + keybinds, pinned to the top center. */
 .toolbar {
   position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2147483647;

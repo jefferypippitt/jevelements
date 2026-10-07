@@ -1,7 +1,8 @@
 // Saves the real files the section shows, so the rebuild never needs a placeholder: every image and
 // video (including the ones the scroll story and hovers swap in), the canvas snapshots, the textures,
 // models and animation files that canvases and WebGL scenes draw from, the scripts holding canvas code,
-// and the one screenshot. The backend ships them in the public/ folder of the app zip.
+// the one screenshot, and the frames of the hover and click sweeps. The backend ships them in the
+// public/ folder of the app zip.
 //
 // The service worker downloads each URL (it has host access to every site, so CORS doesn't apply) and
 // uploads it straight to the backend. What it can't get (hotlink protection that wants the site's
@@ -198,6 +199,24 @@ async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles,
     if (!saved.uploaded.includes(`reference/code/${code.file}`)) code.file = undefined
   }
   for (const code of capture.code ?? []) code.text = undefined
+
+  // Frames of the hover and click sweeps, canvas or section (sweep.ts): public/reference/, next to the
+  // screenshot.
+  const sweeps = [
+    ['hover-sweep', (capture.hoverSweep ?? []).flatMap((h) => h.frames)],
+    ['click-sweep', (capture.clickSweep ?? []).flatMap((c) => c.frames)],
+  ] as const
+  for (const [prefix, frames] of sweeps) {
+    let n = 0
+    for (const frame of frames) {
+      if (frame.dataUrl && uploading) {
+        const file = `${unique(`${prefix}-${String(++n).padStart(2, '0')}`)}.jpg`
+        record(`reference/${file}`, await upload(capture.id, 'frames', file, dataUrlBlob(frame.dataUrl)))
+        if (saved.uploaded.includes(`reference/${file}`)) frame.file = file
+      }
+      frame.dataUrl = undefined
+    }
+  }
 
   // The screenshot, so the agent can open it from public/reference/ as well as from the message.
   if (shot && uploading) record(`reference/${shot.file}`, await upload(capture.id, 'frames', shot.file, dataUrlBlob(shot.dataUrl)))

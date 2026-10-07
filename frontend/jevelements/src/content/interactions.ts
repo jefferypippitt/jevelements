@@ -23,19 +23,27 @@
 // page probe's navigation guard (probe/guard.ts) cancels anything that would leave the page; if it
 // fires, clicking stops. Without the probe nothing is clicked. After each interaction it tries to
 // undo it.
+//
+// Hidden clicks: elements nothing in the markup announces as clickable, but that a script handles (a
+// React onClick on a card, or `cursor: pointer` under a listener that delegates, one on the page or a
+// container that checks what was clicked). They're played last, with the probe's write guard on
+// (probe/writes.ts), so a hidden "like" or "add to cart" can't reach the server, and shown in amber.
 import { label } from '../shared/dom'
-import { PROBE_INTERACTIVE_ATTR, PROBE_POINTER_ATTR } from '../shared/runtime'
-import type { CapturedNode, Interaction, InteractionReport } from '../shared/types'
+import { PROBE_CLICK_ATTR, PROBE_INTERACTIVE_ATTR } from '../shared/runtime'
+import type { CapturedNode, InteractionReport } from '../shared/types'
 import type { LayerReader } from './extract'
 import { ForcedHover, hoverTarget, type HoverRule } from './hover'
-import { allIn, cap, clickSignal, containsDeep, parentOf, delegating, diff, escape, guard, LEAVE, look, nextFrame, outermost, play, pointer, PRESS, quiet, settle, shownAdded, signature, snapshot, switchers, textOf, unsafe, visible, type Snapshot } from './play'
+import { allIn, blockedWrites, blockWrites, clickSignal, hiddenClick, containsDeep, parentOf, delegating, escape, guard, LEAVE, look, outermost, play, pointer, PRESS, quiet, settle, shownAdded, signature, switchers, textOf, unsafe, visible } from './play'
 import { MediaLog } from './seen'
 import { componentAround, componentOf, exploreComponent, outermostComponents, type Component } from './states'
+import type { TraceFocus } from './trace'
 
 const MAX_HOVERS = 16
 const MAX_CLICKS = 16
+const MAX_HIDDEN = 10 // hidden clicks: nothing says they are safe, so fewer
 const MAX_SAME_LOOK = 2 // hover at most this many of a repeated element (cards, dots)
 const MAX_SAME_LOOK_CLICK = 6 // each tab or demo row usually brings up different content
+const MAX_SAME_LOOK_HIDDEN = 2 // cards in a grid usually do the same thing
 const MAX_TRACKED = 600
 const BUDGET_MS = 90_000 // clicks that start a sequence take seconds each
 const EXPLORE_BUDGET_MS = 150_000 // for every component's states together, after the flat pass
@@ -45,6 +53,7 @@ const MIN_LAYER_ELEMENTS = 3 // smaller changes are described by the change line
 export interface InteractionOptions {
   onProgress?: (done: number, total: number) => void
   onExplore?: (component: string, states: number) => void // a component's state explorer found another state
+  onFocus?: (focus: TraceFocus | null) => void // the control about to be played, for the on-page trace
 }
 
 interface Candidate {
@@ -52,6 +61,11 @@ interface Candidate {
   kind: 'hover' | 'click'
   signal: string
   similar: number
+  hidden?: boolean // a hidden click: nothing in the markup says it's clickable (shown in amber)
+  // Played with server writes blocked: a hidden click, or a look-alike row whose markup doesn't say
+  // what it does either. Explicit markup (a tab, aria-expanded) is trusted, so a tab loading its panel
+  // over POST still works.
+  writes?: boolean
   // To find it again if a script rendered it anew meanwhile (a carousel that plays itself): which one
   // of the elements with its look and text it was.
   find: { look: string; text: string; nth: number }
@@ -89,32 +103,38 @@ function hoverSignal(el: Element, cssTargets: string[]): string | null {
 function candidates(root: Element, tracked: Element[], cssTargets: string[]): { list: Candidate[]; skipped: string[]; components: Component[] } {
   const hovers: Candidate[] = []
   const clicks: Candidate[] = []
+  const hiddens: Candidate[] = []
   const skipped: string[] = []
   const components: Component[] = []
   const seen = new Map<string, Candidate[]>()
   const clickable = new Set<Element>()
-  const add = (list: Candidate[], cap: number, el: Element, kind: 'hover' | 'click', signal: string) => {
-    const key = `${kind}|${look(el)}`
+  const add = (list: Candidate[], cap: number, el: Element, kind: 'hover' | 'click', signal: string, hidden = false, writes = false) => {
+    const key = `${hidden ? 'hidden' : kind}|${look(el)}`
     const same = seen.get(key) ?? []
-    if (same.length >= (kind === 'click' ? MAX_SAME_LOOK_CLICK : MAX_SAME_LOOK)) {
+    if (same.length >= (hidden ? MAX_SAME_LOOK_HIDDEN : kind === 'click' ? MAX_SAME_LOOK_CLICK : MAX_SAME_LOOK)) {
       same[0].similar++
       return
     }
     if (list.length >= cap) return
     const text = textOf(el) ?? ''
     const nth = tracked.filter((other) => other !== el && look(other) === look(el) && (textOf(other) ?? '') === text && other.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).length
-    const c = { el, kind, signal, similar: 0, find: { look: look(el), text, nth } }
+    const c = { el, kind, signal, similar: 0, hidden, writes: hidden || writes, find: { look: look(el), text, nth } }
     same.push(c)
     seen.set(key, same)
     list.push(c)
   }
   // Look-alike siblings where one looks selected switch the page in place, marked up or not.
   const picks = switchers(tracked)
+  // A listener above the section or on a container in it may handle a click on a plain element.
+  const delegated = !!document.documentElement.getAttribute(PROBE_CLICK_ATTR)
   for (const el of tracked) {
     if (!visible(el)) continue
     const hover = hoverSignal(el, cssTargets)
     if (hover) add(hovers, MAX_HOVERS, el, 'hover', hover)
-    const click = clickSignal(el) ?? (picks.has(el) ? 'one of a row of look-alike controls where one looks selected (tabs, a toggle, a sidebar)' : null)
+    const marked = clickSignal(el)
+    const known = marked ?? (picks.has(el) ? 'one of a row of look-alike controls where one looks selected (tabs, a toggle, a sidebar)' : null)
+    const click = known ?? hiddenClick(el, delegated)
+    const hidden = !known && !!click
     if (!click || delegating(el)) continue
     // A control inside a control (icon inside a trigger, label inside a row) is the same control.
     // `tracked` is in document order, so the outer one was seen first.
@@ -133,60 +153,10 @@ function candidates(root: Element, tracked: Element[], cssTargets: string[]): { 
       components.push(component)
       continue
     }
-    add(clicks, MAX_CLICKS, el, 'click', click)
+    if (hidden) add(hiddens, MAX_HIDDEN, el, 'click', click, true)
+    else add(clicks, MAX_CLICKS, el, 'click', click, false, !marked)
   }
-  return { list: [...hovers, ...clicks], skipped, components: outermostComponents(components) }
-}
-
-// ---------- the pointer sweep ----------
-
-function movePointer(x: number, y: number) {
-  const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true }
-  window.dispatchEvent(new PointerEvent('pointermove', init))
-  window.dispatchEvent(new MouseEvent('mousemove', init))
-  const hit = document.elementFromPoint(x, y)
-  if (hit && hit.tagName !== 'JEV-INSPECTOR') {
-    hit.dispatchEvent(new PointerEvent('pointermove', init))
-    hit.dispatchEvent(new MouseEvent('mousemove', init))
-  }
-}
-
-// One pass across the section, for a gallery or cursor effect that follows the pointer. Hover only
-// samples the center. Nothing is pressed, so it doesn't activate links.
-async function pointerSweep(root: Element, scope: Element[]): Promise<Interaction | null> {
-  const mode = document.documentElement.getAttribute(PROBE_POINTER_ATTR)
-  if (mode !== 'window' && mode !== 'section') return null
-  const box = root.getBoundingClientRect()
-  if (box.width < 40 || box.height < 40) return null
-  const stops = [0.15, 0.5, 0.85]
-  const samples: Snapshot[] = []
-  for (const stop of stops) {
-    movePointer(box.left + box.width * stop, box.top + box.height * 0.5)
-    await nextFrame()
-    samples.push(snapshot(scope))
-  }
-  movePointer(box.left + box.width / 2, box.top - 20)
-  const first = samples[0]
-  if (!first) return null
-  const changes: string[] = []
-  for (let index = 1; index < samples.length; index++) {
-    const sample = samples[index]
-    if (!sample) continue
-    const at = Math.round((stops[index] ?? 0) * 100)
-    for (const line of diff(scope, first, sample)) changes.push(`at ${at}% across: ${line}`)
-  }
-  if (!changes.length) return null
-  return {
-    kind: 'pointer',
-    target: label(root),
-    similar: 0,
-    signal: mode === 'window' ? 'the page listens for mousemove on the window' : 'the section listens for the pointer',
-    changes: cap(changes),
-    appeared: [],
-    disappeared: [],
-    animations: [],
-    restored: true,
-  }
+  return { list: [...hovers, ...clicks, ...hiddens], skipped, components: outermostComponents(components) }
 }
 
 // The smallest element holding every piece of content a click changed: the region to read as a layer.
@@ -209,7 +179,7 @@ export async function recordInteractions(
   tracked: [Element, CapturedNode][],
   hoverRules: HoverRule[],
   layers: LayerReader,
-  { onProgress, onExplore }: InteractionOptions = {},
+  { onProgress, onExplore, onFocus }: InteractionOptions = {},
   moved: Set<Element> = new Set(), // changed by itself during the capture's idle watch (timeline.ts)
 ): Promise<InteractionReport> {
   const started = performance.now()
@@ -222,7 +192,7 @@ export async function recordInteractions(
   const found = candidates(root, [root, ...allIn(root, 6000)], cssTargets)
   let layerCount = 0
   const forced = new ForcedHover(hoverRules)
-  const report: InteractionReport = { tested: { hover: 0, click: 0, pointer: 0 }, skipped: found.skipped, items: [] }
+  const report: InteractionReport = { tested: { hover: 0, click: 0 }, skipped: found.skipped, items: [] }
   const media = new MediaLog()
 
   // Nothing leaves the page: the probe cancels navigations while this runs. Without it, only hover.
@@ -245,8 +215,16 @@ export async function recordInteractions(
       // Where the control sits, kept before the click: a click that renders it anew detaches it.
       const chain: Element[] = []
       for (let node: Element | null = c.el; node && node !== root; node = parentOf(node)) chain.push(node)
+      // A click nothing in the markup explains is only played with server writes blocked.
+      if (c.writes && !blockWrites(true)) {
+        report.tested.click--
+        if (!report.skipped.some((s) => s.startsWith('clicks without markup'))) report.skipped.push('clicks without markup (hidden clicks, look-alike rows: the page probe that blocks server writes was not available)')
+        continue
+      }
+      onFocus?.({ el: c.el, action: c.hidden ? 'sweep-click' : c.kind, area: root })
       const played = await play(c, root, scope, media, forced)
       if (played.blocked) {
+        blockWrites(false)
         report.skipped.push(played.blocked)
         // The guard cancelled it before anything happened: only this control is skipped. If the URL
         // changed, or the section did anyway (a router half-way into another page), clicking stops.
@@ -306,6 +284,11 @@ export async function recordInteractions(
       await settle()
       if (c.kind === 'click') await quiet(root)
       item.restored = signature(root) === beforeSig
+      if (c.writes) {
+        const writes = blockedWrites()
+        blockWrites(false)
+        if (writes.length) item.signal += `; it tried to write to the server, which was blocked: ${writes.join(', ')}`
+      }
       if (played.changed) report.items.push(item)
     }
 
@@ -324,7 +307,7 @@ export async function recordInteractions(
         const name = label(component.root)
         onExplore?.(name, 1)
         const autoplay = Array.from(moved).some((el) => containsDeep(component.root, el))
-        const explored = await exploreComponent(component, { section: root, layers, media, deadline, autoplay, moved, onState: (states) => onExplore?.(name, states) })
+        const explored = await exploreComponent(component, { section: root, layers, media, deadline, autoplay, moved, onState: (states) => onExplore?.(name, states), onFocus })
         report.tested.click += explored.clicks
         report.items.push(...explored.items)
         report.skipped.push(...explored.skipped)
@@ -335,18 +318,13 @@ export async function recordInteractions(
         }
       }
     }
-
-    const sweep = await pointerSweep(root, els)
-    if (sweep) {
-      report.tested.pointer++
-      report.items.push(sweep)
-    }
   } finally {
+    onFocus?.(null)
     guard(false)
+    blockWrites(false)
     forced.dispose()
-    root.querySelectorAll(`[${PROBE_INTERACTIVE_ATTR}]`).forEach((el) => el.removeAttribute(PROBE_INTERACTIVE_ATTR))
-    root.removeAttribute(PROBE_INTERACTIVE_ATTR)
-    document.documentElement.removeAttribute(PROBE_POINTER_ATTR)
+    // The handler marks stay for the click sweep, which tells controls from free space by them and
+    // removes them when done (sweep.ts endClickSweep).
     window.scrollTo({ top: startY, behavior: 'instant' })
   }
   report.media = media.assets

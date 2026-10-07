@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Click sweep test</title>
+    <!-- Hidden clicks and the click sweep (src/content/interactions.ts, src/content/sweep.ts):
+         pnpm test:build, node test/serve.mjs, then open /test/click.html. -->
+    <script src="/dist/probe.js"></script>
+    <script src="/test/dist/pipeline.js"></script>
+    <style>
+      body { margin: 0; font-family: system-ui; background: #0b0b0f; color: #fff; }
+      #hero { position: relative; height: 560px; padding: 24px; box-sizing: border-box; background: hsl(var(--hue, 250) 40% 12%); }
+      #pond { display: block; width: 480px; height: 300px; background: #111; }
+      .cards { position: absolute; right: 24px; top: 24px; display: grid; gap: 12px; width: 320px; }
+      .card { padding: 16px; border-radius: 12px; background: #1f2937; cursor: pointer; }
+      .card .more { display: none; margin-top: 8px; color: #9ca3af; }
+      .card.open .more { display: block; }
+      .aside { position: absolute; right: 24px; top: 260px; width: 320px; }
+      #like { padding: 16px; border-radius: 12px; background: #7c2d12; }
+      .ripple { position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%; border: 2px solid #fff; pointer-events: none; animation: grow 500ms ease-out forwards; }
+      @keyframes grow { to { transform: scale(3); opacity: 0; } }
+      #out { position: absolute; left: 24px; bottom: 24px; }
+    </style>
+  </head>
+  <body>
+    <section id="hero">
+      <canvas id="pond" width="480" height="300"></canvas>
+      <div class="cards">
+        <!-- Delegated: no handler of their own, only cursor: pointer; the page listens and checks .card. -->
+        <div class="card"><b>Plans</b><div class="more">Monthly or yearly.</div></div>
+        <div class="card"><b>Support</b><div class="more">Email and chat.</div></div>
+      </div>
+      <!-- Scripted: a handler of its own, no markup; it also POSTs, which the write guard must block. -->
+      <div class="aside"><div id="like">Like this <span id="likes">0</span></div></div>
+      <a id="out" href="https://example.com/">A real link (never clicked)</a>
+    </section>
+    <script>
+      const hero = document.getElementById('hero')
+      // The page delegates card clicks, and clicking the free background shifts the hue.
+      document.addEventListener('click', (e) => {
+        const card = e.target.closest('.card')
+        if (card) return card.classList.toggle('open')
+        if (e.target === hero) {
+          const hue = Number(getComputedStyle(hero).getPropertyValue('--hue') || 250)
+          hero.style.setProperty('--hue', String((hue + 40) % 360))
+          // A ripple where the click landed.
+          const r = hero.getBoundingClientRect()
+          const ring = document.createElement('span')
+          ring.className = 'ripple'
+          ring.style.left = `${e.clientX - r.left}px`
+          ring.style.top = `${e.clientY - r.top}px`
+          hero.append(ring)
+          setTimeout(() => ring.remove(), 500)
+        }
+      })
+      document.getElementById('like').addEventListener('click', () => {
+        const n = document.getElementById('likes')
+        n.textContent = String(Number(n.textContent) + 1)
+        fetch('/api/like', { method: 'POST', body: '{}' }).catch(() => {})
+      })
+      // A canvas that spreads a ring from wherever it is clicked, and remembers the last click.
+      const pond = document.getElementById('pond')
+      const g = pond.getContext('2d')
+      let ring = null
+      pond.addEventListener('pointerdown', (e) => {
+        ring = { x: e.offsetX, y: e.offsetY, t: performance.now() }
+      })
+      const draw = (now) => {
+        g.fillStyle = '#111'
+        g.fillRect(0, 0, 480, 300)
+        if (ring) {
+          const age = (now - ring.t) / 700
+          if (age < 1) {
+            g.strokeStyle = `rgba(56, 189, 248, ${1 - age})`
+            g.lineWidth = 4
+            g.beginPath()
+            g.arc(ring.x, ring.y, 10 + age * 80, 0, Math.PI * 2)
+            g.stroke()
+          } else ring = null
+        }
+        requestAnimationFrame(draw)
+      }
+      requestAnimationFrame(draw)
+    </script>
+  </body>
+</html>

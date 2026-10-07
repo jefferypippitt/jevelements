@@ -2,7 +2,7 @@
 // a section's controls (interactions.ts) and the state explorer that walks a component's nested states
 // (states.ts).
 import { label, stableClasses } from '../shared/dom'
-import { PROBE_BLOCKED_ATTR, PROBE_CLOCK_ATTR, PROBE_CLOCK_EVENT, PROBE_GUARD_ATTR, PROBE_GUARD_EVENT, PROBE_INTERACTIVE_ATTR } from '../shared/runtime'
+import { PROBE_BLOCKED_ATTR, PROBE_CLOCK_ATTR, PROBE_CLOCK_EVENT, PROBE_GUARD_ATTR, PROBE_GUARD_EVENT, PROBE_INTERACTIVE_ATTR, PROBE_WRITES_ATTR, PROBE_WRITES_BLOCKED_ATTR, PROBE_WRITES_EVENT } from '../shared/runtime'
 import type { Interaction, InteractionPhase } from '../shared/types'
 import { childrenOf, normalizeColors, tidyNumbers } from './extract'
 import type { ForcedHover } from './hover'
@@ -129,6 +129,16 @@ export function clickSignal(el: Element): string | null {
   return null
 }
 
+// A click nothing in the markup announces: a handler of its own on an element that isn't a button (a
+// React onClick on a card), or `cursor: pointer` under a listener that delegates (one on the page, or a
+// container that checks what was clicked). The click sweep plays these with server writes blocked.
+export function hiddenClick(el: Element, delegated: boolean): string | null {
+  if (el.matches('a[href], label, input, select, textarea, option, summary, [contenteditable="true"]')) return null
+  if (scripted(el)) return 'hidden click: a click handler in the page script, and nothing in the markup says it is clickable'
+  if (delegated && ownPointer(el)) return 'hidden click: `cursor: pointer` and no handler of its own (a click delegated to a parent or the page)'
+  return null
+}
+
 // A click listener on a container that holds controls of its own (one listener for every row of a
 // list, the usual event delegation) doesn't make the container a control: its controls are the ones
 // to click.
@@ -149,6 +159,18 @@ export function unsafe(el: Element): string | null {
   const words = `${textOf(el) ?? ''} ${el.getAttribute('title') ?? ''} ${el.id} ${el.getAttribute('class') ?? ''}`
   if (DANGER.test(words)) return 'looks like an action, not a toggle'
   return null
+}
+
+// Turns the probe's write guard on or off (probe/writes.ts): while on, requests that write to a server
+// fail. True when it's on: the probe answers synchronously.
+export function blockWrites(on: boolean): boolean {
+  document.dispatchEvent(new CustomEvent(PROBE_WRITES_EVENT, { detail: on ? 'block' : 'allow' }))
+  return document.documentElement.hasAttribute(PROBE_WRITES_ATTR)
+}
+
+// What the write guard blocked since it was turned on: "POST /api/like", "beacon /collect".
+export function blockedWrites(): string[] {
+  return (document.documentElement.getAttribute(PROBE_WRITES_BLOCKED_ATTR) ?? '').split('\n').filter(Boolean)
 }
 
 // Turns the probe's navigation guard on or off. True when it's on: the probe answers synchronously.

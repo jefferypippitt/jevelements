@@ -437,3 +437,40 @@ export function beginThree(renderer: Renderer, state: HookState): ThreeSession {
     },
   }
 }
+
+// Every number the renderer's scenes hold right now, by readable name: uniforms, the camera, and the
+// objects' transforms. The canvas pointer sweep (content/sweep.ts) reads it at each point to find the
+// values that follow the pointer (a mouse uniform, a camera that leans toward it, a mesh that turns).
+export function threeValues(renderer: Renderer, state: HookState): Map<string, number[]> {
+  const out = new Map<string, number[]>()
+  const put = (key: string, value: number[] | null) => {
+    if (value && !out.has(key)) out.set(key, value)
+  }
+  for (const s of state.scenes.get(renderer) ?? []) {
+    const scene = s.scene.deref() as Object3D | undefined
+    const camera = s.camera.deref() as Object3D | undefined
+    if (!scene) continue
+    if (camera) {
+      put('camera.position', [camera.position.x, camera.position.y, camera.position.z ?? 0])
+      put('camera.rotation', [camera.rotation.x, camera.rotation.y, camera.rotation.z ?? 0])
+    }
+    let n = 0
+    walk(scene, (o, depth) => {
+      if (n++ > MAX_SAMPLED_OBJECTS) return
+      if (depth > 0) {
+        const name = `${o.name || o.type}${o.name ? '' : ` #${n}`}`
+        put(`${name}.position`, [o.position.x, o.position.y, o.position.z ?? 0])
+        put(`${name}.rotation`, [o.rotation.x, o.rotation.y, o.rotation.z ?? 0])
+        put(`${name}.scale`, [o.scale.x, o.scale.y, o.scale.z ?? 0])
+      }
+      for (const m of materialsOf(o)) {
+        for (const [name, u] of Object.entries(m.uniforms ?? {})) {
+          const v = numbers(u?.value)
+          const key = out.has(name) && out.get(name)?.join() !== v?.join() ? `${name} (${m.name || m.type})` : name
+          put(key, v)
+        }
+      }
+    })
+  }
+  return out
+}

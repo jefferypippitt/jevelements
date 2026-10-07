@@ -29,6 +29,7 @@ import type { LayerReader } from './extract'
 import { allIn, clickSignal, containsDeep, delegating, DEMO, ENTER, escape, guard, holdClock, LEAVE, look, ownPointer, parentOf, PHASE_WINDOW_MS, play, pointer, PRESS, quiet, settle, STATE_ATTRS, textOf, unsafe, visible, wait } from './play'
 import type { MediaLog } from './seen'
 import { directText } from './timeline'
+import type { TraceFocus } from './trace'
 
 const MAX_STATES = 20 // per component
 const MAX_CLICKS = 80 // measured clicks per component; moves between states don't count
@@ -379,6 +380,7 @@ export interface ExploreContext {
   autoplay: boolean
   moved: Set<Element> // what changed by itself during the idle watch: not a click's doing
   onState?: (states: number) => void
+  onFocus?: (focus: TraceFocus) => void // the control about to be pressed, for the on-page trace
 }
 
 export interface Explored {
@@ -567,6 +569,7 @@ async function explore(component: Component, x: ExploreContext): Promise<Explore
     const c = find(key)
     if (!c) return false
     c.el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
+    x.onFocus?.({ el: c.el, action: 'move', area: rootNow() })
     guard(true)
     scanned = null
     pointer(c.el, [...ENTER, ...PRESS])
@@ -618,6 +621,7 @@ async function explore(component: Component, x: ExploreContext): Promise<Explore
     const control = find(next.control)!
     const scope = [rootNow(), ...allIn(rootNow(), MAX_ELEMENTS)]
     scanned = null
+    x.onFocus?.({ el: control.el, action: 'click', area: rootNow() })
     const played = await play({ el: control.el, kind: 'click', signal: component.signal, similar: 0 }, x.section, scope, x.media)
     clicks++
     pointer(control.el, LEAVE)

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pointer hover test</title>
+    <!-- The hover sweep over a section's own elements (src/content/sweep.ts): pnpm test:build, node
+         test/serve.mjs, then open /test/pointer.html and run
+         JevTest.inspectRuntime(hero).then(() => JevTest.sweepHover(hero)). -->
+    <script src="/dist/probe.js"></script>
+    <script src="/test/dist/pipeline.js"></script>
+    <style>
+      body { margin: 0; font-family: system-ui; background: #0b0b0f; color: #fff; }
+      #hero {
+        position: relative; height: 520px; overflow: hidden;
+        background: radial-gradient(240px circle at var(--x, -999px) var(--y, -999px), rgba(120, 90, 255, 0.45), transparent 70%), #0b0b0f;
+      }
+      #follower { position: fixed; left: 0; top: 0; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #fff; pointer-events: none; }
+      #layer { position: absolute; left: 60px; top: 60px; width: 220px; height: 120px; border-radius: 16px; background: #1f2937; }
+      #card { position: absolute; right: 80px; top: 160px; width: 260px; height: 200px; border-radius: 20px; background: #6d28d9; transition: transform 300ms ease-out; }
+    </style>
+  </head>
+  <body>
+    <section id="hero">
+      <div id="layer"></div>
+      <div id="card"></div>
+      <div id="follower"></div>
+    </section>
+    <script>
+      const hero = document.getElementById('hero')
+      const follower = document.getElementById('follower')
+      const layer = document.getElementById('layer')
+      const card = document.getElementById('card')
+      // A cursor follower that eases toward the pointer, and a parallax layer, both from window.
+      const target = { x: -100, y: -100 }
+      const dot = { x: -100, y: -100 }
+      window.addEventListener('mousemove', (e) => {
+        target.x = e.clientX
+        target.y = e.clientY
+        const dx = e.clientX - window.innerWidth / 2
+        const dy = e.clientY - window.innerHeight / 2
+        layer.style.transform = `translate(${dx * -0.05}px, ${dy * -0.05}px)`
+      })
+      const tick = () => {
+        dot.x += (target.x - dot.x) * 0.15
+        dot.y += (target.y - dot.y) * 0.15
+        follower.style.transform = `translate(${dot.x}px, ${dot.y}px)`
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+      // A spotlight: the section writes the pointer into CSS custom properties its background uses.
+      hero.addEventListener('pointermove', (e) => {
+        const r = hero.getBoundingClientRect()
+        hero.style.setProperty('--x', `${e.clientX - r.left}px`)
+        hero.style.setProperty('--y', `${e.clientY - r.top}px`)
+      })
+      hero.addEventListener('pointerleave', () => {
+        hero.style.setProperty('--x', '-999px')
+        hero.style.setProperty('--y', '-999px')
+      })
+      // A tilt card: it leans toward the pointer while over it, and back flat on leave.
+      card.addEventListener('mousemove', (e) => {
+        const r = card.getBoundingClientRect()
+        const px = (e.clientX - r.left) / r.width - 0.5
+        const py = (e.clientY - r.top) / r.height - 0.5
+        card.style.transform = `perspective(800px) rotateX(${py * -20}deg) rotateY(${px * 20}deg)`
+      })
+      card.addEventListener('mouseleave', () => { card.style.transform = 'none' })
+    </script>
+  </body>
+</html>

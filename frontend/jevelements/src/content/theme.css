@@ -1,6 +1,7 @@
 /*
  * JevElements design tokens: the single source of truth for the on-page UI (imported by overlay.css).
- * shadcn palette (dark set, magenta primary); --highlight (blue) is reserved for the hover ring around the picked element.
+ * shadcn palette (dark set, magenta primary); --highlight (blue) is reserved for the hover ring around the picked element,
+ * --trace (pink) for the rings around what a capture is playing, --trace-sweep (green) for the hover sweep, --trace-click (amber) for the click sweep.
  * Tokens live on :host, not :root, because :root variables don't reach into the shadow root.
  * Sizes are px, not rem: inside a shadow root, rem follows the host page's root font size.
  */
@@ -29,6 +30,9 @@
   --chart-4: oklch(0.518 0.253 323.949);
   --chart-5: oklch(0.452 0.211 324.591);
   --highlight: oklch(0.623 0.214 259.815); /* blue-500 */
+  --trace: oklch(0.656 0.241 354.308); /* pink-500: what a capture is hovering or clicking (trace.ts) */
+  --trace-sweep: oklch(0.627 0.194 149.214); /* green-600 (white text stays readable on it): the canvas the pointer is swept over (sweep.ts) */
+  --trace-click: oklch(0.666 0.179 58.318); /* amber-600: what the click sweep is clicking (hidden clicks, clicks over a canvas) */
 
   --radius: 10px;
   --control-height: 32px; /* every button */

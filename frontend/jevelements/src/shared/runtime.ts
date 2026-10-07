@@ -13,8 +13,9 @@ export const PROBE_INTERACTIVE_ATTR = 'data-jev-interactive'
 // marks its handlers synchronously.
 export const PROBE_MARK_EVENT = 'jev:mark'
 export const PROBE_MARK_ATTR = 'data-jev-mark'
-// "window" when the page listens for mousemove on window/document, "section" when the captured
-// element itself does. The content script sweeps the pointer across and then removes it.
+// "window" when the page listens for the pointer's position (mousemove/pointermove) on window or document,
+// "section" when the captured element, an element in it or a wrapper around it does (React's onMouseMove
+// too). The hover sweep (content/sweep.ts) sweeps the section only then, and removes it after.
 export const PROBE_POINTER_ATTR = 'data-jev-pointer'
 // The content script turns the probe's navigation guard on ("on") while it plays a section's hovers
 // and clicks, and off ("off") after. The probe sets PROBE_GUARD_ATTR on <html> while the guard is on,
@@ -28,3 +29,21 @@ export const PROBE_BLOCKED_ATTR = 'data-jev-blocked'
 // The probe sets PROBE_CLOCK_ATTR on <html> while it holds them.
 export const PROBE_CLOCK_EVENT = 'jev:clock'
 export const PROBE_CLOCK_ATTR = 'data-jev-clock'
+// The canvas pointer sweep (content/sweep.ts) asks for the numbers a canvas's renderer holds (raw WebGL
+// uniforms, three.js uniforms, camera and object transforms) by dispatching PROBE_VALUES_EVENT on the
+// canvas itself, which reaches the probe from inside shadow roots too. The probe answers synchronously
+// with PROBE_VALUES_RESULT_EVENT, a JSON object of name → numbers.
+export const PROBE_VALUES_EVENT = 'jev:values'
+export const PROBE_VALUES_RESULT_EVENT = 'jev:values-result'
+// While the click sweep clicks things nothing in the markup says are safe, the content script asks
+// the probe to block requests that write to a server ("block", then "allow"). The probe sets
+// PROBE_WRITES_ATTR on <html> while it blocks, and lists what it blocked, one per line, in
+// PROBE_WRITES_BLOCKED_ATTR.
+export const PROBE_WRITES_EVENT = 'jev:writes'
+export const PROBE_WRITES_ATTR = 'data-jev-writes'
+export const PROBE_WRITES_BLOCKED_ATTR = 'data-jev-writes-blocked'
+// "page" when a click listener sits on the window or document, "section" when it sits on the section,
+// a wrapper around it or a container inside it (React's onClick too, not its root listener): an
+// element with only `cursor: pointer` may be handled by it, and a canvas may react where it is clicked.
+// Set by the probe while it inspects the section; the click sweep removes it.
+export const PROBE_CLICK_ATTR = 'data-jev-click'

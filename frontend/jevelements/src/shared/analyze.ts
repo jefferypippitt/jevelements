@@ -17,7 +17,9 @@ export function captureForAnalysis(capture: Capture): Capture {
     media: undefined,
     items: capture.interactions.items.map((i) => ({ ...i, layers: undefined })),
   }
-  const slim: Capture = { ...capture, assets, runtime, scrollStory, interactions }
+  const hoverSweep = capture.hoverSweep?.map((h) => ({ ...h, frames: h.frames.map((f) => ({ ...f, dataUrl: undefined })) }))
+  const clickSweep = capture.clickSweep?.map((c) => ({ ...c, frames: c.frames.map((f) => ({ ...f, dataUrl: undefined })) }))
+  const slim: Capture = { ...capture, assets, runtime, scrollStory, interactions, hoverSweep, clickSweep }
   delete slim.screenshot
   delete slim.fullScreenshot
   delete slim.saved
