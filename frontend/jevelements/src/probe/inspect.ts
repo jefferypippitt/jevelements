@@ -116,10 +116,12 @@ function describeWebGL(canvas: HTMLCanvasElement, state: HookState, before: Map<
   const ctx = state.contexts.get(canvas)
   const uniforms = uniformLines(canvas, state, before, seconds)
   const programs = Array.from(state.programs.get(canvas)?.values() ?? [])
+  const device = state.devices.get(canvas)
+  const wgsl = device && state.wgsl.get(device)
   const uses = (source: string, line: string) => new RegExp(`\\b${line.split(/[:[]/)[0].trim()}\\b`).test(source)
   return {
     target: label(canvas),
-    context: ctx ? `${ctx.type} ${literal(ctx.attributes ?? {})}` : 'unknown (the context was created before the probe loaded)',
+    context: ctx ? (ctx.attributes ? `${ctx.type} ${literal(ctx.attributes)}` : ctx.type) : 'unknown (the context was created before the probe loaded)',
     programs: programs.map((p, i) => ({
       name: `program ${i + 1}`,
       vertex: p.vertex,
@@ -127,6 +129,7 @@ function describeWebGL(canvas: HTMLCanvasElement, state: HookState, before: Map<
       uniforms: programs.length === 1 ? uniforms : uniforms.filter((u) => uses(p.vertex, u) || uses(p.fragment, u)),
     })),
     textures: Array.from(state.textures.get(canvas) ?? []),
+    wgsl: wgsl && wgsl.length ? [...wgsl] : undefined,
   }
 }
 
@@ -157,7 +160,7 @@ export async function inspectRuntime(state: HookState): Promise<RuntimeData> {
 
   const renderers = Array.from(new Set(state.renderers.map((r) => r.deref()))).filter((r) => r && inRoot(r.domElement))
   const sessions: ThreeSession[] = renderers.map((r) => beginThree(r!, state))
-  const rawCanvases = canvases.filter((c) => !state.threeCanvases.has(c) && (state.contexts.has(c) || state.programs.has(c)))
+  const rawCanvases = canvases.filter((c) => !state.threeCanvases.has(c) && (state.contexts.has(c) || state.programs.has(c) || state.devices.has(c)))
   const before = new Map(rawCanvases.map((c) => [c, new Map(Array.from(state.uniforms.get(c) ?? [], ([k, v]) => [k, { ...v }]))]))
   const started = performance.now()
   if (sessions.length || rawCanvases.length) await sleep(SAMPLE_MS)

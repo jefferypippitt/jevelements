@@ -33,7 +33,7 @@ import { PROBE_CLICK_ATTR, PROBE_INTERACTIVE_ATTR } from '../shared/runtime'
 import type { CapturedNode, InteractionReport } from '../shared/types'
 import type { LayerReader } from './extract'
 import { ForcedHover, hoverTarget, type HoverRule } from './hover'
-import { allIn, blockedWrites, blockWrites, clickSignal, hiddenClick, containsDeep, parentOf, delegating, escape, guard, LEAVE, look, outermost, play, pointer, PRESS, quiet, settle, shownAdded, signature, switchers, textOf, unsafe, visible } from './play'
+import { allIn, blockedWrites, blockWrites, clickSignal, hiddenClick, containsDeep, parentOf, delegating, escape, goesTo, guard, LEAVE, look, outermost, play, pointer, PRESS, quiet, settle, shownAdded, signature, switchers, textOf, unsafe, visible } from './play'
 import { MediaLog } from './seen'
 import { componentAround, componentOf, exploreComponent, outermostComponents, type Component } from './states'
 import type { TraceFocus } from './trace'
@@ -225,8 +225,10 @@ export async function recordInteractions(
       const played = await play(c, root, scope, media, forced)
       if (played.blocked) {
         blockWrites(false)
-        report.skipped.push(played.blocked)
-        // The guard cancelled it before anything happened: only this control is skipped. If the URL
+        // Where it goes is its behaviour: the rebuild opens the same URL the same way.
+        if (played.destination) (report.navigates ??= []).push(`\`${label(c.el)}\`${textOf(c.el) ? ` "${textOf(c.el)}"` : ''} ${goesTo(played.destination)}`)
+        else report.skipped.push(played.blocked)
+        // The guard cancelled it before anything happened: only this control is left. If the URL
         // changed, or the section did anyway (a router half-way into another page), clicking stops.
         await quiet(root)
         if (played.navigated || signature(root) !== played.beforeSig) {

@@ -19,11 +19,13 @@ export const PROBE_MARK_ATTR = 'data-jev-mark'
 export const PROBE_POINTER_ATTR = 'data-jev-pointer'
 // The content script turns the probe's navigation guard on ("on") while it plays a section's hovers
 // and clicks, and off ("off") after. The probe sets PROBE_GUARD_ATTR on <html> while the guard is on,
-// so the content script can tell it's really there, and PROBE_BLOCKED_ATTR to the URL of a
-// navigation it cancelled.
+// so the content script can tell it's really there, PROBE_BLOCKED_ATTR to the URL of a navigation it
+// cancelled, and PROBE_BLOCKED_TARGET_ATTR to where it would have opened: "_self" (this tab) or the
+// window.open target ("_blank", a named window).
 export const PROBE_GUARD_EVENT = 'jev:guard'
 export const PROBE_GUARD_ATTR = 'data-jev-guard'
 export const PROBE_BLOCKED_ATTR = 'data-jev-blocked'
+export const PROBE_BLOCKED_TARGET_ATTR = 'data-jev-blocked-target'
 // While the content script explores a component's states, it asks the probe to hold the page's long
 // timers ("hold", then "release"), so a demo that plays itself stays in the state a click put it in.
 // The probe sets PROBE_CLOCK_ATTR on <html> while it holds them.
@@ -42,6 +44,21 @@ export const PROBE_VALUES_RESULT_EVENT = 'jev:values-result'
 export const PROBE_WRITES_EVENT = 'jev:writes'
 export const PROBE_WRITES_ATTR = 'data-jev-writes'
 export const PROBE_WRITES_BLOCKED_ATTR = 'data-jev-writes-blocked'
+// The light/dark comparison (content/scheme.ts) asks the probe to make the page's scripts see an OS
+// colour scheme ("light" or "dark", then "off"): matchMedia answers for it and `change` listeners
+// hear the switch. The probe sets PROBE_SCHEME_ATTR on <html> to the scheme while it emulates one.
+export const PROBE_SCHEME_EVENT = 'jev:scheme'
+export const PROBE_SCHEME_ATTR = 'data-jev-scheme'
+// A media query condition on the OS colour scheme, and the same query with it decided: always true
+// for the emulated scheme, never for the other, so the rest of the query is still evaluated.
+export const COLOR_SCHEME_QUERY = /\(\s*prefers-color-scheme\s*:\s*(light|dark)\s*\)/gi
+export function emulateColorScheme(media: string, scheme: 'light' | 'dark'): string {
+  return media.replace(COLOR_SCHEME_QUERY, (_, wanted: string) => (wanted.toLowerCase() === scheme ? '(width >= 0px)' : '(width < 0px)'))
+}
+export function mentionsColorScheme(media: string): boolean {
+  COLOR_SCHEME_QUERY.lastIndex = 0
+  return COLOR_SCHEME_QUERY.test(media)
+}
 // "page" when a click listener sits on the window or document, "section" when it sits on the section,
 // a wrapper around it or a container inside it (React's onClick too, not its root listener): an
 // element with only `cursor: pointer` may be handled by it, and a canvas may react where it is clicked.

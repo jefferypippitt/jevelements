@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Hover strokes test</title>
+    <!-- What the hover sweep's strokes (src/content/sweep.ts) must find that a grid of held points
+         missed: pnpm test:build, node test/serve.mjs, then open /test/strokes.html and run
+         JevTest.inspectRuntime(hero).then(() => JevTest.sweepHover(hero)). -->
+    <script src="/dist/probe.js"></script>
+    <script src="/test/dist/pipeline.js"></script>
+    <style>
+      body { margin: 0; font-family: system-ui; background: #000; color: #fff; }
+      #bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; }
+      #hero { position: relative; z-index: 1; height: 560px; }
+      #corner { position: absolute; left: 40px; top: 40px; width: 200px; height: 140px; border-radius: 16px; background: #0e7490; }
+    </style>
+  </head>
+  <body>
+    <!-- A page-wide background outside the section: a trail that only shows while the pointer moves
+         and fades within a few frames once it stops. -->
+    <canvas id="bg"></canvas>
+    <section id="hero">
+      <!-- A tilt card in a corner, away from the strokes through the middle. -->
+      <div id="corner"></div>
+    </section>
+    <script>
+      const hero = document.getElementById('hero')
+      const bg = document.getElementById('bg')
+      bg.width = innerWidth
+      bg.height = innerHeight
+      const g = bg.getContext('2d')
+      let last = null
+      window.addEventListener('pointermove', (e) => {
+        if (last) {
+          g.strokeStyle = '#38bdf8'
+          g.lineWidth = 18
+          g.lineCap = 'round'
+          g.beginPath()
+          g.moveTo(last.x, last.y)
+          g.lineTo(e.clientX, e.clientY)
+          g.stroke()
+        }
+        last = { x: e.clientX, y: e.clientY }
+      })
+      const fade = () => {
+        g.fillStyle = 'rgba(0, 0, 0, 0.35)'
+        g.fillRect(0, 0, bg.width, bg.height)
+        requestAnimationFrame(fade)
+      }
+      requestAnimationFrame(fade)
+
+      const corner = document.getElementById('corner')
+      corner.addEventListener('mousemove', (e) => {
+        const r = corner.getBoundingClientRect()
+        const px = (e.clientX - r.left) / r.width - 0.5
+        const py = (e.clientY - r.top) / r.height - 0.5
+        corner.style.transform = `perspective(600px) rotateX(${py * -16}deg) rotateY(${px * 16}deg)`
+      })
+      corner.addEventListener('mouseleave', () => { corner.style.transform = 'none' })
+    </script>
+  </body>
+</html>

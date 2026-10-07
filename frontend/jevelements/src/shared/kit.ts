@@ -13,15 +13,20 @@ function kebab(value: string): string {
     .replace(/^-|-$/g, '')
 }
 
-// A readable word from the element itself: `#pricing`, `.feature-grid`, <footer>.
-function elementName(capture: Capture): string | null {
-  const root = capture.root
-  for (const raw of [root.id, ...(root.classes ?? [])]) {
+// A readable word from an element's id or classes (`#pricing`, `.feature-grid`), skipping utility classes.
+export function readableName(names: (string | undefined)[]): string | null {
+  for (const raw of names) {
     if (!raw || UTILITY_CLASS.test(raw)) continue
     const name = kebab(raw).replace(/-?section$/, '')
     if (/^[a-z][a-z-]{2,23}$/.test(name)) return name
   }
-  return TAG_NAMES[root.tag] ?? null
+  return null
+}
+
+// A readable word from the element itself: `#pricing`, `.feature-grid`, <footer>.
+function elementName(capture: Capture): string | null {
+  const root = capture.root
+  return readableName([root.id, ...(root.classes ?? [])]) ?? TAG_NAMES[root.tag] ?? null
 }
 
 export function kitBase(capture: Capture): string {

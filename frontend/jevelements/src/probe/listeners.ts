@@ -3,7 +3,8 @@
 // document_start, and React handlers are read from the props React keeps on each DOM node. The content
 // script reads the result from a data attribute, then hovers and clicks those elements. Listeners for
 // the pointer's position (mousemove, pointermove, React's onMouseMove) are kept apart: they mean the
-// section follows the pointer, which the hover sweep (content/sweep.ts) maps point by point.
+// section follows the pointer, which the hover sweep (content/sweep.ts) maps, and the elements that have
+// one of their own are marked `move` too, so it sweeps each of them on its own.
 import { PROBE_CLICK_ATTR, PROBE_INTERACTIVE_ATTR, PROBE_POINTER_ATTR } from '../shared/runtime'
 
 const HOVER_EVENTS = new Set(['mouseenter', 'mouseover', 'pointerenter', 'pointerover', 'mousemove', 'pointermove'])
@@ -15,7 +16,9 @@ const REACT_MOVE = ['onMouseMove', 'onPointerMove']
 const REACT_PRESS = ['onClick', 'onPointerDown', 'onMouseDown', 'onPointerUp', 'onMouseUp']
 const MAX_ELEMENTS = 4000
 
-const listened = new WeakMap<EventTarget, Set<'hover' | 'click'>>()
+type Kind = 'hover' | 'click' | 'move'
+
+const listened = new WeakMap<EventTarget, Set<Kind>>()
 const moving = new WeakSet<EventTarget>() // listens for the pointer's position: elements, document, window
 const clicking = new WeakSet<EventTarget>() // listens for clicks and presses: elements, document, window
 
@@ -27,6 +30,7 @@ export function hookListeners() {
     if (this instanceof Element && (HOVER_EVENTS.has(type) || CLICK_EVENTS.has(type))) {
       const kinds = listened.get(this) ?? new Set()
       kinds.add(HOVER_EVENTS.has(type) ? 'hover' : 'click')
+      if (MOVE_EVENTS.has(type)) kinds.add('move')
       listened.set(this, kinds)
     }
     return (original as (...args: unknown[]) => void).call(this, type, ...rest)
@@ -43,12 +47,13 @@ function reactProps(el: Element): Record<string, unknown> | undefined {
 
 // React props of the DOM node, plus those of the components right above it (motion.div keeps
 // whileHover/whileTap on the wrapping component, not on the <div>).
-function reactKinds(el: Element): Set<'hover' | 'click'> {
-  const kinds = new Set<'hover' | 'click'>()
+function reactKinds(el: Element): Set<Kind> {
+  const kinds = new Set<Kind>()
   const scan = (props: Record<string, unknown> | undefined) => {
     if (!props) return
     if (REACT_HOVER.some((k) => props[k])) kinds.add('hover')
     if (REACT_CLICK.some((k) => props[k])) kinds.add('click')
+    if (REACT_MOVE.some((k) => props[k])) kinds.add('move')
   }
   scan(reactProps(el))
   const fiberKey = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))

@@ -1,8 +1,9 @@
 // Turns a Capture into one markdown prompt for an IDE agent (Claude Code, Cursor, …).
 // Every section is markdown: headings, lists, and fenced code. This runs locally today;
 // the backend LLM can later refine or replace it using the same Capture JSON.
-import { componentNames, kitBase, projectName } from './kit'
-import type { Asset, Capture, CapturedNode, CodeRef, ComponentStates, Interaction, PageTransition, PhysicsWorld, SectionAnalysis, ShaderSource, TextAnimation } from './types'
+import { componentNames, kitBase, projectName, readableName } from './kit'
+import { isWgsl } from './shader'
+import type { Asset, AssetLook, Capture, CapturedNode, CodeRef, ComponentStates, Interaction, PageTransition, PhysicsWorld, SectionAnalysis, SectionPart, ShaderSource, TextAnimation } from './types'
 
 // The rebuild always happens in its own Next.js app (App Router, TypeScript, Tailwind CSS): the
 // <name>.zip the extension downloads, with the saved files in public/ (see Capture.project). The
@@ -23,9 +24,48 @@ ${structure}
 - Keep components Server Components and add \`"use client"\` only to the ones that need state, effects or event handlers.
 - Style with Tailwind utility classes. When a value is not exactly on Tailwind's scale, use an arbitrary value (e.g. \`text-[56px]\`, \`leading-[64px]\`, \`bg-[#0b0b0f]\`, \`shadow-[0_1px_2px_#0000000d]\`). Never round to the nearest step. Put \`@keyframes\`, \`@font-face\` and anything Tailwind can't express in \`app/globals.css\`.
 - Every image, video and other asset lives in \`public/\` and is referenced by its local path (\`/capture/…\`). Never hotlink the original site.
-- Install any npm package the spec calls for (\`gsap\`, \`three\`, \`lenis\`, \`motion\`, \`lottie-web\`, …) with \`npm install\`.
+- Install any npm package the spec calls for (\`gsap\`, \`three\`, \`vgpu\`, \`lenis\`, \`motion\`, \`lottie-web\`, …) with \`npm install\`.
 - Output only this section, with no page chrome, nav, or footer unless they are part of the captured element.
-- Keep the section's text content exactly as written below, including capitalization and punctuation.`
+- Keep the section's text content exactly as written below, including capitalization and punctuation.
+- This is a 1:1 rebuild of the section, behaviour included. Build every behaviour this spec records: each hover, click, drag, cursor change, link and navigation, and each canvas or shader reaction, with the same values, timing and destinations. Never leave one out, simplify it, or list it as skipped. A shape on a canvas that shows a pointer cursor and opens a page when clicked is built that way, with a hit test against that shape. If something can't be reproduced exactly, build the closest version and say what differs.`
+}
+
+// The section's parts (content/parts.ts) as the component split: each bigger part gets its own file,
+// a part that repeats is one component rendered per item, and a lone heading or line of text stays
+// inline in its parent.
+const OWN_FILE: SectionPart['kind'][] = ['group', 'list', 'nav', 'header', 'footer', 'form']
+
+function partsSection(capture: Capture, kit: string): string | null {
+  const parts = capture.parts ?? []
+  if (!parts.length) return null
+  const { file, component } = componentNames(kit)
+  const used = new Set<string>()
+  const fileFor = (p: SectionPart): string | null => {
+    if (!OWN_FILE.includes(p.kind) && !(p.repeats && p.repeats > 1)) return null
+    const [tag, ...rest] = p.name.split('.')
+    const [, id] = tag.split('#')
+    const word = readableName([id, ...rest]) ?? (p.repeats && p.repeats > 1 ? 'item' : p.kind)
+    let name = `${file}-${word}`
+    for (let i = 2; used.has(name); i++) name = `${file}-${word}-${i}`
+    used.add(name)
+    return name
+  }
+  const pascal = (name: string) => name.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')
+  const line = (p: SectionPart, depth: number): string[] => {
+    const pad = '  '.repeat(depth)
+    const own = depth === 0 || (p.repeats ?? 0) > 1 ? fileFor(p) : null
+    const many = p.repeats && p.repeats > 1 ? ` ×${p.repeats} in a row` : ''
+    const where = `at (${p.box.x}, ${p.box.y}), ${p.box.w}×${p.box.h}${many ? ' (the first one)' : ''}`
+    const text = p.items?.length ? `; each one's text: ${p.items.map((t) => JSON.stringify(t)).join(', ')}` : p.text ? `: ${JSON.stringify(p.text)}` : ''
+    const target = own ? ` → \`components/${own}.tsx\` (\`${pascal(own)}\`${many ? ', rendered once per item with what differs as props' : ''})` : ''
+    const out = [`${pad}- ${inlineCode(p.name)} ${p.kind}${many} ${where}${target}${text}`]
+    for (const sub of p.parts ?? []) out.push(...line(sub, depth + 1))
+    return out
+  }
+  return `## Parts (the component split)
+The section is built from these parts, in this order, as read from the page (wrappers holding a single child are looked through). Split the rebuild the same way: each part with a file named below is its own component in that file, and \`${component}\` composes them with the same layout and spacing as the tree. A part that repeats is one component rendered once per item, with what differs (text, image, link) passed as props. Parts without a file (a heading, a line of text, one image) stay inline in their parent. Element names match the tree under **Structure & exact styles**, and every style comes from there. Boxes are relative to the section's top-left corner.
+
+${parts.flatMap((p) => line(p, 0)).join('\n')}`
 }
 
 // Same floors as backend/src/lib/judgment.ts. A confident collapse replaces the generic stack.
@@ -114,6 +154,7 @@ function renderTree(node: CapturedNode, depth: number, lines: string[], isRoot: 
     lines.push(`${inner}- ${inlineCode(name)} — content ${inlineCode(p.content)}${declaredCode}`)
   }
   for (const s of node.states ?? []) lines.push(`${inner}- ${inlineCode(s.state)} — ${inlineCode(s.declarations)}`)
+  for (const c of node.conditional ?? []) field('conditional', c)
   for (const rule of node.authored ?? []) field('authored css', inlineCode(rule))
   for (const m of node.motion ?? []) field('motion (JS)', inlineCode(m))
   for (const s of node.scroll ?? []) field('scroll', inlineCode(s))
@@ -212,7 +253,13 @@ The goal is a **pixel-accurate 1:1 clone**: the same structure, layout, dimensio
 
   sections.push(stackSection(kit, capture.analysis?.scope))
 
+  const parts = partsSection(capture, kit)
+  if (parts) sections.push(parts)
+
   sections.push(fontsSection(capture, ref))
+
+  const theme = themeSection(capture)
+  if (theme) sections.push(theme)
 
   sections.push(`## Structure & exact styles
 The captured tree is a nested markdown list. How to read each item:
@@ -225,6 +272,7 @@ The captured tree is a nested markdown list. How to read each item:
 - **css** lists computed values that differ from browser defaults. Inherited properties (color, font-*, line-height, letter-spacing, …) appear only where they change from the parent.
 - \`::before\` and \`::after\` are pseudo-elements with their full styles. They are often the decorative layer (glows, gradients, masks).
 - \`:hover\`, \`:focus\`, and similar lines are state rules taken from the site's stylesheets.
+- **conditional** names a variant class (\`dark:\`, \`group-hover:\`, \`peer-*\`, \`aria-*\`, \`data-[…]:\`, \`supports-*\`) whose rule was not applying when the section was captured, what it needs to apply, and the computed value that showed instead. Keep the class, but the value it names is what was on screen: build to that.
 - **authored css** is the site's original rule for an animated element, with the \`var(--…)\` references that computed values resolve away.
 - **motion (JS)** means the value kept changing while the page sat idle, so a script animates it (see **Animation & motion**).
 - **scroll** lists values that changed while the section was scrolled through the viewport, as \`progress% value\` points; between two points with the same value it holds (see **Scroll story**).
@@ -233,11 +281,23 @@ The captured tree is a nested markdown list. How to read each item:
 ${tree}`)
 
   if (capture.responsive.length) {
-    sections.push(`## Responsive behavior (media/container queries from the site's CSS that target this section)
-Recreate the same breakpoints and changes:
+    // Theme variants switched by a selector (`.dark\:invert:is(.dark *)`) sit with the media queries,
+    // so a `dark:` that isn't the OS setting can't be missed.
+    const queries = capture.responsive.filter((r) => r.kind !== 'selector')
+    const variants = capture.responsive.filter((r) => r.kind === 'selector')
+    const lead = queries.length ? 'Recreate the same breakpoints and changes:' : responsiveFallback(capture.analysis?.collapse).replace(/^## Responsive behavior\n/, '')
+    const rules = [
+      ...queries.map((r) => `${r.media} {\n  ${r.selector} { ${r.declarations} }\n}`),
+      ...variants.map((r) => `/* ${r.media} */\n${r.selector} { ${r.declarations} }`),
+    ]
+    const note = variants.length
+      ? `\n\nThe rules under a \`/* dark mode: … */\` comment are switched by a selector on an ancestor, not by a media query (see **Theme / dark mode**). In the rebuild they are the same \`dark:\` classes, with the \`@custom-variant\` line from that section.`
+      : ''
+    sections.push(`## Responsive behavior (media/container queries and theme variants from the site's CSS that target this section)
+${lead}
 \`\`\`css
-${capture.responsive.map((r) => `${r.media} {\n  ${r.selector} { ${r.declarations} }\n}`).join('\n')}
-\`\`\``)
+${rules.join('\n')}
+\`\`\`${note}`)
   } else {
     sections.push(responsiveFallback(capture.analysis?.collapse))
   }
@@ -258,6 +318,8 @@ ${capture.responsive.map((r) => `${r.media} {\n  ${r.selector} { ${r.declaration
   if (transitions) sections.push(transitions)
   const lottie = lottieSection(capture, plan)
   if (lottie) sections.push(lottie)
+  const shaders = vgpuSection(capture, kit)
+  if (shaders) sections.push(shaders)
   const webgl = webglSection(capture, ref)
   if (webgl) sections.push(webgl)
   const hoverSweep = hoverSweepSection(capture)
@@ -318,6 +380,7 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
   if (unreadGl.length) caveats.push(capture.code?.length ? "Some canvas/WebGL content couldn't be watched while it ran; its code comes from the page's scripts (**Canvas source code**), so values set at runtime (colors passed in, sizes, uniforms) must be read from that code." : 'Some canvas/WebGL content is captured as pixels only; its drawing code and scene could not be read.')
   if (readGl.size) caveats.push('WebGL data comes from the running page: values driven by the mouse or scroll are as they were at capture time.')
   if (capture.simulation && !capture.simulation.idle) caveats.push('Scripted changes during the idle watch are listed under Recorded simulation. Replay that timeline; the tree alone is the first frame.')
+  if (capture.simulation?.settled) caveats.push(`The idle watch ran before the hover and click passes, with focus inside the section cleared. ${capture.simulation.settled} style change(s) it saw were a \`:hover\`/\`:focus\` transition settling (the pointer was resting where the section was picked), not a script, so they are left out of **motion (JS)**.`)
   if (capture.scrollRecorded) caveats.push('Scroll-linked changes were recorded by scrolling down only, after the section sat still. Whether a reveal reverses when scrolling back up was not tested: keep it played.')
   if (capture.interactions) {
     const sweep = capture.hoverSweep?.length
@@ -331,7 +394,8 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
 
   sections.push(`## Acceptance checklist
 - [ ] At a ${capture.viewport.w}px-wide viewport, the section renders at ${root.box.w}×${root.box.h}px (±2px).
-- [ ] Fonts load from the listed sources, and every family, weight, size, line-height, letter-spacing, OpenType feature and variable-font axis matches the **css** lines.
+- [ ] Fonts load from the local files under **Fonts** (or as that section says), the browser's network panel shows no failed font request, and every family, weight, size, line-height, letter-spacing, OpenType feature and variable-font axis matches the **css** lines.
+- [ ] With the OS in dark mode, the section still matches ${capture.saved?.screenshot ?? 'section.png'} (unless the spec lists dark-mode differences).
 - [ ] Every color, gradient, background layer, blend mode, filter and mask matches exactly; no approximated palette colors.
 - [ ] Padding, margins, gaps, radii, borders, and shadows match the **css** lines.
 - [ ] Pseudo-elements (::before / ::after) are recreated with their full styles.
@@ -351,6 +415,14 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
       : ''
   }${
     readGl.size ? '\n- [ ] Each WebGL canvas renders the same scene and shaders, with the same camera, colors, and animation speed.' : ''
+  }${
+    needsVgpu(capture)
+      ? '\n- [ ] Shaders outside three.js run on vgpu (WGSL), pass `npx vgpu check`, log no WebGPU errors, match the canvas snapshot in color, scale and speed, and fall back to the snapshot without WebGPU.'
+      : ''
+  }${
+    capture.clickSweep?.some((c) => c.cursor?.length || c.navigates?.length) || capture.interactions?.navigates?.length
+      ? '\n- [ ] The cursor changes over the same shapes, and every click listed under **Where a click goes** / **Where clicks go** opens the same URL in the same tab or a new one. Nothing is skipped.'
+      : ''
   }`)
 
   return sections.join('\n\n')
@@ -366,12 +438,95 @@ function shaderBlock(s: ShaderSource, budget: { left: number }): string {
     if (!code) continue
     if (code.length <= INLINE_SHADER_MAX && code.length <= budget.left) {
       budget.left -= code.length
-      out.push(`  ${stage} shader:\n\`\`\`glsl\n${code}\n\`\`\``)
+      out.push(`  ${stage} shader:\n\`\`\`${isWgsl(code) ? 'wgsl' : 'glsl'}\n${code}\n\`\`\``)
     } else {
       out.push(`  ${stage} shader: ${kb(code.length)}, ${TOO_LARGE}.`)
     }
   }
   return out.join('\n')
+}
+
+// Shaders that aren't part of a three.js scene (hand-written WebGL or WebGPU, and shader code found in
+// the page's scripts) are rebuilt with vgpu: WebGPU, WGSL files, one effect per full-screen pass.
+// https://vgpu.sh/docs/get-started/web and https://vgpu.sh/examples are the source of this setup.
+function needsVgpu(capture: Capture): boolean {
+  return (
+    !!capture.runtime?.webgl.some((g) => g.programs.length || g.wgsl?.length) ||
+    (capture.code ?? []).some((c) => c.shaders.length || c.unreachable?.length) ||
+    capture.embeds.some((e) => e.offscreen)
+  )
+}
+
+function vgpuSection(capture: Capture, kit: string): string | null {
+  if (!needsVgpu(capture)) return null
+  const { file } = componentNames(kit)
+  return `## Shaders: build them with vgpu
+Rebuild every shader in this section that isn't part of a three.js scene (hand-written WebGL or WebGPU, and the shader code under **Canvas source code**) with **vgpu** (<https://vgpu.sh>), a small WebGPU library: shaders are \`.wgsl\` files, a full-screen fragment shader is an \`effect\`, and every uniform is set explicitly. three.js scenes stay in three.js. Before writing the renderer, look at the working examples at <https://vgpu.sh/examples> that are closest to this effect (\`npx vgpu examples search "<what it looks like>"\`, then \`npx vgpu examples cat <id> renderer.ts\` and \`shader.wgsl\`) and follow their structure. Look up anything else with \`npx vgpu docs find <topic>\`.
+
+**Setup.** Install it, let Next.js import \`.wgsl\` files, and type those imports:
+\`\`\`bash
+npm install vgpu @vgpu/wgsl
+\`\`\`
+\`\`\`ts
+// next.config.ts: merge into the existing config
+turbopack: {
+  rules: {
+    '*.wgsl': { loaders: ['@vgpu/wgsl/loader-webpack'], as: '*.js' },
+  },
+},
+\`\`\`
+\`\`\`ts
+// wgsl-env.d.ts (project root)
+/// <reference types="@vgpu/wgsl/wgsl-types" />
+\`\`\`
+
+**Structure.** A \`"use client"\` component renders the \`<canvas>\` (same size and position as in the tree, \`block h-full w-full\`), and a renderer file next to it owns the GPU. Start from this and add what the captured shader needs (more uniforms, textures, passes):
+\`\`\`ts
+// components/${file}-shader.ts
+import { clock, effect, frameLoop, init, surface } from 'vgpu'
+import fragment from './${file}-shader.wgsl'
+
+export async function createRenderer(canvas: HTMLCanvasElement) {
+  const gpu = await init()
+  try {
+    const output = surface(gpu, canvas, { dpr: [1, 2] })
+    const shader = effect(gpu, fragment, { set: { params: { resolution: output.size, time: 0, pointer: [0.5, 0.5] } } })
+    await shader.compile({ colors: [output.format] })
+    const stopResize = output.onResize(() => shader.set({ params: { resolution: output.size } }))
+    const time = clock(gpu)
+    frameLoop(gpu, (frame) => {
+      shader.set({ params: { time: time.time } })
+      frame.pass(output, shader)
+    })
+    return { dispose: () => { stopResize(); gpu.dispose() } }
+  } catch (error) {
+    gpu.dispose()
+    throw error
+  }
+}
+\`\`\`
+\`\`\`wgsl
+// components/${file}-shader.wgsl
+struct Params { resolution: vec2f, time: f32, pointer: vec2f }
+@group(0) @binding(0) var<uniform> params: Params;
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let st = vec2f(uv.x, 1.0 - uv.y); // bottom-left origin, as in the original GLSL
+  return vec4f(st, 0.5 + 0.5 * sin(params.time), 1.0);
+}
+\`\`\`
+In the component, call \`createRenderer(canvas)\` in a \`useEffect\` and dispose it on unmount (the promise may still be pending: \`pending.then((r) => r?.dispose())\`). If \`init()\` rejects (no WebGPU), show the canvas snapshot from \`public/capture/\` at the same size instead; never leave the area empty. Under \`prefers-reduced-motion: reduce\`, hold time still.
+
+**Porting GLSL to WGSL.** Translate syntax only: keep every constant, color, noise function, loop count and the order of operations exactly as captured.
+- vgpu's \`uv\` starts at the top-left and \`v\` grows downward. GLSL and Shadertoy code assume bottom-left: flip once (\`1.0 - uv.y\`) and keep the rest unchanged. \`gl_FragCoord.xy\` is \`st * params.resolution\`.
+- There are no built-in uniforms. Every uniform the original declares goes into the one \`Params\` struct at \`@group(0) @binding(0)\` and is set by name with \`shader.set({ params: { … } })\`: time from \`clock(gpu).time\` (in seconds, times the original speed), resolution from \`output.size\` (drawing-buffer pixels). Set values that never change once, and only what changes each frame in the loop.
+- Types and syntax: \`float\` → \`f32\`, \`int\` → \`i32\`, \`vec3\` → \`vec3f\`, \`mat2\` → \`mat2x2f\`; \`let\` for constants and \`var\` for variables; no implicit int-to-float (write \`1.0\`); functions are \`fn name(x: f32) -> f32\`; \`#define\` becomes \`const\` or a function.
+- Built-ins: \`mod(x, y)\` is not \`%\` (WGSL \`%\` truncates; write \`x - y * floor(x / y)\`); \`atan(y, x)\` → \`atan2(y, x)\`; \`inversesqrt\` → \`inverseSqrt\`; \`dFdx\`/\`dFdy\` → \`dpdx\`/\`dpdy\`; \`texture2D(t, uv)\` → \`textureSample(t, samp, uv)\` with a texture and a sampler binding set through \`shader.set({ t: texture, samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }) })\`. \`mix\`, \`fract\`, \`smoothstep\`, \`step\`, \`clamp\`, \`length\`, \`dot\` are the same.
+- Several programs drawn in sequence (feedback, blur, bloom, a composite) are separate effects: render each into a \`target(gpu, { size })\` and bind that target as the next effect's input; ping-pong two targets for feedback. Create one effect per pass, since each owns its uniforms.
+- Geometry other than a full-screen quad (particles, meshes) uses \`draw(gpu, …)\`; see \`npx vgpu docs find draws\`.
+- Pointer input: listen where the original does (see **Pointer hover**), ease the value in the frame loop as measured there, and write it to \`params\` each frame.
+
+**Check it.** Run \`npx vgpu check components/${file}-shader.wgsl\` until it reports no errors, then open the page: the browser console must show no WGSL or WebGPU errors, and a frame must match the canvas snapshot (colors, scale, speed).`
 }
 
 function webglSection(capture: Capture, ref: (url: string) => string): string | null {
@@ -412,13 +567,19 @@ function webglSection(capture: Capture, ref: (url: string) => string): string | 
   })
 
   rt.webgl.forEach((g) => {
-    const lines = [`### Hand-written WebGL on \`${g.target}\``, `Context: ${g.context}.`]
-    if (g.programs.length) {
+    const api = /webgpu/.test(g.context) || g.wgsl?.length ? 'WebGPU' : 'WebGL'
+    const lines = [`### Hand-written ${api} on \`${g.target}\``, `Context: ${g.context}.`]
+    if (g.programs.length || g.wgsl?.length) {
       lines.push(
-        'Recreate it with the same shaders and uniform values: a minimal WebGL setup, or a full-screen plane with a three.js RawShaderMaterial (OGL works too). Uniforms marked as animating change every frame: drive them from requestAnimationFrame at the same rate. Uniforms fed by the mouse or scroll only change when the user interacts.',
+        'Recreate it with vgpu (see **Shaders: build them with vgpu**), with the same shaders and uniform values. Uniforms marked as animating change every frame: drive them from the frame loop at the same rate. Uniforms fed by the mouse or scroll only change when the user interacts.',
       )
-      const blocks = g.programs.map((p) => shaderBlock(p, budget))
-      lines.push(blocks.join('\n'))
+      if (g.programs.length) lines.push(g.programs.map((p) => shaderBlock(p, budget)).join('\n'))
+      for (const [i, code] of (g.wgsl ?? []).entries()) {
+        if (code.length <= INLINE_SHADER_MAX && code.length <= budget.left) {
+          budget.left -= code.length
+          lines.push(`- **WGSL module ${i + 1}** (as the page compiled it):\n\`\`\`wgsl\n${code}\n\`\`\``)
+        } else lines.push(`- **WGSL module ${i + 1}**: ${kb(code.length)}, ${TOO_LARGE}.`)
+      }
     } else {
       lines.push(
         rt.lateProbe
@@ -454,10 +615,22 @@ function clickSweepSection(capture: Capture): string | null {
     const noun = c.kind
     const lines = [`### \`${c.target}\` (${noun === 'canvas' ? 'a canvas' : "the section's background"}) [${c.box.w}×${c.box.h}]`, `Clicked: ${c.swept}. Values: ${c.values}. Pixels: ${c.measured}.`]
     if (c.reactions.length) lines.push(`**What a click changes**:\n${c.reactions.map((l) => `- ${l}`).join('\n')}`)
+    if (c.drag?.length) lines.push(`**What a drag does** (the button pressed, moved left to right across its middle and released, against the same move without the button; build it with pointerdown, pointermove while pressed and pointerup, with the same rate per px, inertia or spring back):\n${c.drag.map((l) => `- ${l}`).join('\n')}`)
     if (c.added.length) lines.push(`**What a click adds** (build it as an element spawned at the click, with the same lifetime):\n${c.added.map((l) => `- ${l}`).join('\n')}`)
+    if (c.cursor?.length) {
+      const map = c.cursorMap?.length ? `\n\`\`\`text\n${c.cursorMap.join('\n')}\n\`\`\`\n(█ pointer, ▒ another cursor, · the usual cursor, × not read: a control is there; rows by how far down the ${noun}, columns left to right)` : ''
+      lines.push(
+        `**Where the cursor changes** (read point by point as the pointer moved over it). The ${noun} sets the cursor itself, so the change follows what it draws, not an element: hit-test the pointer against that shape (a raycast, or a point-in-shape test in the same coordinates the drawing uses) on every \`pointermove\` and set \`cursor\` on the ${noun} to match. Use the shape's outline, not its bounding box:\n${c.cursor.map((l) => `- ${l}`).join('\n')}${map}`,
+      )
+    }
+    if (c.navigates?.length) {
+      lines.push(
+        `**Where a click goes** (the capture cancelled the navigation, so this is all the click does): on a click that lands on the same shape (the same hit test as the cursor), open the same URL the same way: \`window.location.assign(url)\` for the same tab, \`window.open(url, '_blank', 'noopener')\` for a new one. Keep the URL absolute, pointing at the original site, unless this app has that route. Clicks elsewhere on the ${noun} don't navigate:\n${c.navigates.map((l) => `- ${l}`).join('\n')}`,
+      )
+    }
     if (c.map?.length) {
       lines.push(
-        `**Where clicks react**: how much the pixels changed at the peak of a click at each point of the grid (█ most, ▓ ▒ ░ less, ·· nothing, ×× left out: a control is there; rows by how far down the ${noun}, columns left to right):\n\`\`\`text\n${c.map.join('\n')}\n\`\`\``,
+        `**Where clicks react**: how much the pixels changed at the peak of a click at each point of the grid (█ most, ▓ ▒ ░ less, ·· nothing, ↗↗ the click opened a page (see **Where a click goes**), ×× left out: a control is there; rows by how far down the ${noun}, columns left to right):\n\`\`\`text\n${c.map.join('\n')}\n\`\`\``,
       )
     }
     if (c.hotspots.length) lines.push(`**Strongest reactions**:\n${c.hotspots.map((l) => `- ${l}`).join('\n')}`)
@@ -467,7 +640,7 @@ function clickSweepSection(capture: Capture): string | null {
     return lines.join('\n\n')
   })
   return `## Click sweep (clicked where nothing is a control)
-Clicking these where no link, button or other control is reacts: a ripple or a burst at the click, an object picked on a canvas, a background that changes. Each was clicked at a grid of points with navigation and server writes blocked, and every click followed frame by frame. Rebuild the same: listen for the click (or pointerdown) where the original does, at the same place in the page, and do what is listed: set the same values, spawn the same elements at the click point for as long as listed, toggle or count the same way. A position is a percentage of the clicked box from its top-left corner.
+Clicking these where no link, button or other control is reacts: a ripple or a burst at the click, an object picked on a canvas, a shape that opens a page, a background that changes. The cursor was read first at a fine grid of points; each part where it changes was clicked inside, then a grid of points, with navigation and server writes blocked, and every click followed frame by frame. Rebuild the same: listen for the click (or pointerdown) where the original does, at the same place in the page, and do what is listed: set the same values, spawn the same elements at the click point for as long as listed, toggle or count the same way, change the cursor over the same shapes, and open the same pages. Every item here is part of the 1:1 rebuild. A position is a percentage of the clicked box from its top-left corner.
 
 ${parts.join('\n\n')}`
 }
@@ -484,7 +657,7 @@ function hoverSweepSection(capture: Capture): string | null {
     if (h.motion.length) lines.push(`**Motion**:\n${h.motion.map((l) => `- ${l}`).join('\n')}`)
     if (h.map?.length) {
       lines.push(
-        `**Where it reacts**: how much the pixels changed with the pointer held in each cell of the grid, against the ${noun} at rest (█ most, ▓ ▒ ░ less, blank none; rows by how far down the ${noun}, columns left to right):\n\`\`\`text\n${h.map.join('\n')}\n\`\`\``,
+        `**Where it reacts**: how much the pixels changed against the ${noun} at rest as the pointer went left to right through its middle, and top to bottom (one character per stretch of the stroke; █ most, ▓ ▒ ░ less, blank none, · not read):\n\`\`\`text\n${h.map.join('\n')}\n\`\`\``,
       )
     }
     if (h.hotspots.length) lines.push(`**Strongest reactions**:\n${h.hotspots.map((l) => `- ${l}`).join('\n')}`)
@@ -494,7 +667,7 @@ function hoverSweepSection(capture: Capture): string | null {
     return lines.join('\n\n')
   })
   return `## Pointer hover (the pointer swept over the section)
-These follow the pointer's position, not just whether it is over them: a shader, a spotlight, a cursor follower, parallax layers, a tilt, a magnetic pull. Each was swept with a virtual pointer: held at a grid of points (finer where it reacted most) until it settled, with its values and pixels read at each point. Rebuild it with the same input: listen where the original does (usually \`pointermove\` on \`window\`, converted to the element's coordinates as described), drive the same values (shader uniforms, or the transforms and CSS custom properties listed) with the same mapping and easing, and reproduce the same reaction in the same places, including on pointer leave. For a canvas whose values weren't readable, take the input from **Canvas source code** and match the map, the strongest reactions and the frames. Element names are as in the tree. A position is a percentage of the swept box from its top-left corner.
+These follow the pointer's position, not just whether it is over them: a shader, a spotlight, a cursor follower, parallax layers, a tilt, a magnetic pull. Each was swept with a virtual pointer in one continuous stroke left to right and one top to bottom, as a hand would test it, with its values and pixels read every frame as it moved (eased values fitted against where the pointer was a moment before); components with a pointer effect of their own were swept the same way on their own. Rebuild it with the same input: listen where the original does (usually \`pointermove\` on \`window\`, converted to the element's coordinates as described), drive the same values (shader uniforms, or the transforms and CSS custom properties listed) with the same mapping and easing, and reproduce the same reaction in the same places, including on pointer leave. For a canvas whose values weren't readable, take the input from **Canvas source code** and match the map, the strongest reactions and the frames. Element names are as in the tree. A position is a percentage of the swept box from its top-left corner.
 
 ${parts.join('\n\n')}`
 }
@@ -686,6 +859,11 @@ function interactionsSection(capture: Capture): string | null {
   }
   if (capture.hoverSweep?.length) lines.push('What follows the pointer\'s position (as opposed to these per-element hovers) is under **Pointer hover**.')
   if (!report.items.length) lines.push('None of them changed anything visible: any remaining hover and focus effects come from the CSS state lines in the tree.')
+  if (report.navigates?.length) {
+    lines.push(
+      `### Where clicks go\nClicking these leaves the page (the capture cancelled it, so nothing after the click was recorded). Build each one to go to the same URL the same way: a link (\`<a href>\`, with \`target="_blank" rel="noopener"\` for a new tab) on the same element, keeping its captured styles and hover state. Keep the URL absolute, pointing at the original site, unless this app has that route.\n${report.navigates.map((n) => `- ${n}`).join('\n')}`,
+    )
+  }
   if (report.skipped.length) lines.push(`Not clicked on purpose: ${report.skipped.join('; ')}. Build them as ordinary controls with the captured styles.`)
   return lines.join('\n\n')
 }
@@ -736,21 +914,140 @@ Play the same animation data with lottie-web or @lottiefiles/dotlottie-web, in a
 ${lines.join('\n')}`
 }
 
+// next/font hashes family names: "__Inter_d65c78" is Inter.
+function nextFontName(family: string): string | null {
+  const m = /^__(.+?)_[0-9a-f]{5,8}$/.exec(family)
+  return m && !/Fallback/.test(m[1]) ? m[1].replace(/_/g, ' ') : null
+}
+
+// The site's font files are saved in public/fonts/ and the @font-face rules point there: sites usually
+// serve fonts without CORS headers, so a rebuild that loads them from the site's URLs silently gets a
+// fallback font.
 function fontsSection(capture: Capture, ref: (url: string) => string): string {
+  const saved = capture.saved
+  const local = (url: string) => {
+    const file = saved?.fonts?.[url]
+    return file && capture.project && saved.uploaded.includes(`fonts/${file}`) ? `/fonts/${file}` : undefined
+  }
+  const blocked = new Map((saved?.fontsFailed ?? []).map((f) => [f.src, f.reason]))
   const lines = capture.fonts.map((f) => {
-    const out = [`- **${f.family}**: weights ${f.weights.join(', ')}${f.styles.some((s) => s !== 'normal') ? `; styles ${f.styles.join(', ')}` : ''}`]
+    const real = nextFontName(f.family)
+    const out = [`- **${f.family}**${real ? ` (next/font's name for **${real}**)` : ''}: weights ${f.weights.join(', ')}${f.styles.some((s) => s !== 'normal') ? `; styles ${f.styles.join(', ')}` : ''}`]
     for (const link of f.links) out.push(`  - Stylesheet: ${ref(link)}`)
     if (f.faces.length) {
+      const files = f.files.map((url) => ({ url, path: local(url) }))
       let faces = f.faces.join('\n')
-      for (const file of f.files) faces = faces.split(file).join(ref(file).replace(/^[<`]|[>`]$/g, ''))
-      out.push(`  - @font-face rules from the site (files: ${f.files.map(ref).join(', ')}):\n\`\`\`css\n${faces}\n\`\`\``)
+      for (const { url, path } of files) faces = faces.split(url).join(path ?? ref(url).replace(/^[<`]|[>`]$/g, ''))
+      const kept = files.filter((x) => x.path)
+      const missing = files.filter((x) => !x.path)
+      const where = kept.length
+        ? `with the site's font files saved in \`public/fonts/\` (${kept.map((x) => `\`${x.path}\``).join(', ')}). Use these local font files: put the rules in \`app/globals.css\` as written`
+        : `files: ${f.files.map(ref).join(', ')}`
+      out.push(`  - @font-face rules from the site, ${where}:\n\`\`\`css\n${faces}\n\`\`\``)
+      const refused = missing.filter((x) => blocked.has(x.url))
+      if (refused.length) {
+        out.push(
+          `  - ${refused.length} of its file(s) couldn't be downloaded (${blocked.get(refused[0].url)}): the site blocks other websites from loading its fonts, so ${refused.length === 1 ? 'that URL' : 'those URLs'} won't load in the rebuild and the browser would silently use a fallback. Load **${real ?? f.family}** with \`next/font/google\` (if it's a Google font) or a local copy of the font instead, with the same weights${f.fallback ? ' and the fallback below' : ''}.`,
+        )
+      } else if (missing.length) {
+        out.push(`  - ${missing.length} of its file(s) aren't in this app (it was packaged without them), and sites usually block other websites from loading their fonts: if a URL above doesn't load, use \`next/font/google\` (if it's a Google font) or a local copy of **${real ?? f.family}**.`)
+      }
+    }
+    if (f.fallback?.length) {
+      out.push(`  - The site's metric-matched fallback font: keep it in \`app/globals.css\` and after **${f.family}** in every \`font-family\` (as in the **css** lines), so text keeps its size while the font loads:\n\`\`\`css\n${f.fallback.join('\n')}\n\`\`\``)
     }
     if (!f.links.length && !f.faces.length) out.push('  - No @font-face rule or font stylesheet found: a system font, or loaded by a script (check "Files loaded by the page\'s scripts").')
     return out.join('\n')
   })
   return `## Fonts
-Load these fonts exactly as the site does. The per-element typography (size, weight, line-height, letter-spacing, OpenType features, variable-font axes, text-wrap) is in the tree's **css** lines.
+Use the local font files listed here (in \`public/fonts/\`, referenced as \`/fonts/…\`), never the site's font URLs: sites usually serve fonts without CORS headers, so other websites can't load them and the browser silently falls back to another font. Keep each family name exactly as written, since the tree's **css** lines use it. The per-element typography (size, weight, line-height, letter-spacing, OpenType features, variable-font axes, text-wrap) is in the tree's **css** lines.
 ${lines.join('\n') || '- (no text found)'}`
+}
+
+// How the site switches dark mode and what the light/dark comparison found. Tailwind v4's `dark:`
+// follows the OS unless globals.css says otherwise, so a site that switches it with a class needs the
+// same @custom-variant, or its `dark:` classes turn on for anyone whose computer is in dark mode.
+function themeSection(capture: Capture): string | null {
+  const theme = capture.theme
+  const check = capture.schemes
+  if (!theme && !check) return null
+  const lines = ['## Theme / dark mode']
+  const main = theme?.methods[0]
+
+  if (theme) {
+    const tag = (name: string, attrs: Record<string, string>) => inlineCode(`<${[name, ...Object.entries(attrs).map(([k, v]) => `${k}="${v}"`)].join(' ')}>`)
+    const bodyScheme = theme.colorScheme.body !== theme.colorScheme.html ? `, computed \`color-scheme: ${theme.colorScheme.body}\`` : ''
+    const body = Object.keys(theme.body).length || bodyScheme ? `; ${tag('body', theme.body)}${bodyScheme}` : ''
+    lines.push(
+      `- At capture: ${tag('html', theme.html)}, computed \`color-scheme: ${theme.colorScheme.html}\`${body}.${theme.stored ? ` The page keeps \`${theme.stored}\` in localStorage.` : ''} The OS was in ${theme.osDark ? 'dark' : 'light'} mode.`,
+    )
+    if (!main) {
+      lines.push(
+        theme.darkClasses
+          ? `- ${theme.darkClasses} element(s) in the section carry \`dark:\` classes, but no compiled \`dark:\` rule could be read from the site's CSS${capture.unreadableStylesheets ? ` (${capture.unreadableStylesheets} stylesheet(s) couldn't be read)` : ''}. Treat the section as showing its light styles (the computed values in the tree).`
+          : "- The site's CSS has no `dark:` rules.",
+      )
+    } else {
+      const example = inlineCode(main.example)
+      const how =
+        main.kind === 'media'
+          ? `**media-based**: its compiled CSS has ${example} (${main.rules} rule(s)), so \`dark:\` follows the OS colour scheme, \`@media (prefers-color-scheme: dark)\`.`
+          : `**${main.kind}-based** (a selector): its compiled CSS has ${example} (${main.rules} rule(s)), so \`dark:\` styles apply only inside an element with ${inlineCode(main.trigger)}, never from the OS setting.`
+      lines.push(`- How the site switches \`dark:\`: ${how}`)
+      const htmlClass = theme.html.class ? `; ${inlineCode(`<html class="${theme.html.class}">`)}` : ''
+      const why =
+        main.kind === 'media'
+          ? `the OS was in ${theme.osDark ? 'dark' : 'light'} mode`
+          : main.active
+            ? `the section is inside ${inlineCode(main.trigger)}`
+            : `nothing on or above the section has ${inlineCode(main.trigger)}${htmlClass}`
+      lines.push(`- Theme active at capture: **${main.active ? 'dark' : 'light'}** (${why}).`)
+      if (main.kind === 'media') {
+        lines.push("- Reproduce it: Tailwind v4's default `dark:` is this same media query, so `app/globals.css` needs no `@custom-variant` line. `dark:` classes then follow the OS exactly as on the site.")
+      } else {
+        const where = `${main.trigger}, ${main.trigger} *`
+        const themeAttr = main.kind === 'class' ? 'className' : main.trigger.slice(1, -1).split('=')[0]
+        const tokens = (theme.html.class ?? '').split(/\s+/).filter((t) => /^(light|dark)$|theme|mode|scheme/i.test(t))
+        const htmlValue =
+          main.kind === 'class'
+            ? tokens.length
+              ? `className="${tokens.join(' ')}"`
+              : null
+            : theme.html[themeAttr]
+              ? `${themeAttr}="${theme.html[themeAttr]}"`
+              : null
+        const onHtml = htmlValue
+          ? ` Give \`<html>\` in \`app/layout.tsx\` the same theme the site had: \`<html lang="en" ${htmlValue}>\`.`
+          : main.active
+            ? ` The section was inside ${inlineCode(main.trigger)}: put it on \`<html>\` in \`app/layout.tsx\` (or on the section's wrapper).`
+            : ''
+        lines.push(
+          `- Reproduce it: in \`app/globals.css\`, right after \`@import "tailwindcss";\`, add exactly:\n\`\`\`css\n@custom-variant dark (&:where(${where}));\n\`\`\`\nWithout it, Tailwind v4's default \`dark:\` follows the OS (\`prefers-color-scheme\`) and would turn the section's \`dark:\` classes on for anyone whose computer is in dark mode, unlike the site.${onHtml}`,
+        )
+      }
+      const others = theme.methods.slice(1)
+      if (others.length) lines.push(`- Also found, with fewer rules: ${others.map((m) => `${inlineCode(m.trigger)} (${m.kind}, ${m.rules} rule(s))`).join(', ')}. Follow the main method above.`)
+      if (theme.colorScheme.html !== 'normal') lines.push(`- Set \`color-scheme: ${theme.colorScheme.html}\` on \`html\` in \`app/globals.css\`, as the site does: scrollbars and form controls follow it.`)
+    }
+  }
+
+  if (check) {
+    const out: string[] = ['### OS colour scheme check']
+    const partial = check.partial ? ` The emulation was partial: ${check.partial}.` : ''
+    if (check.error) {
+      const fromCss = main && main.kind !== 'media' ? ` From the CSS alone: the section's \`dark:\` styles are switched by ${inlineCode(main.trigger)}, not by the OS, so the rebuild must look the same in light and dark mode.` : ''
+      out.push(`The light/dark comparison couldn't run (${check.error}).${fromCss}`)
+    } else if (!check.differs) {
+      out.push(`The section was captured with the OS colour scheme emulated as light, then dark (\`prefers-color-scheme\`). This section does not respond to the OS colour scheme; the rebuild must look identical in light and dark mode.${check.pixels ? ` ${check.pixels}.` : ''}${partial}`)
+    } else {
+      const shots = check.files ? ` Both looks are in \`public/reference/\`: \`${check.files.light}\` and \`${check.files.dark}\`.` : ''
+      out.push(
+        `The section was captured with the OS colour scheme emulated as light, then dark (\`prefers-color-scheme\`), and it changes.${shots}${check.pixels ? ` ${check.pixels}.` : ''}${partial} Build these dark-mode differences, and nothing else:\n${check.differences.map((d) => `- ${d}`).join('\n') || '- (no style value differs: compare the two screenshots)'}`,
+      )
+    }
+    return `${lines.join('\n')}\n\n${out.join('\n\n')}`
+  }
+  return lines.join('\n')
 }
 
 function animationSection(capture: Capture, jsMotion: number): string | null {
@@ -814,7 +1111,7 @@ Text that a script wrote while the page sat idle, recorded change by change (typ
 ${items.join('\n')}`
 }
 
-const CODE_SHADER_BUDGET = 60_000 // chars of GLSL from the page's scripts in the whole prompt
+const CODE_SHADER_BUDGET = 60_000 // chars of shader code from the page's scripts in the whole prompt
 
 function codeSection(capture: Capture): string | null {
   const refs: CodeRef[] = capture.code ?? []
@@ -827,19 +1124,28 @@ function codeSection(capture: Capture): string | null {
     if (c.shaders.length) {
       const shown: string[] = []
       for (const sh of c.shaders) {
+        const lang = isWgsl(sh) ? 'wgsl' : 'glsl'
         if (sh.length > budget) {
-          shown.push(`// … ${kb(sh.length)} more GLSL: read it in the file`)
+          shown.push(`\`\`\`${lang}\n// … ${kb(sh.length)} more ${lang.toUpperCase()}: read it in the file\n\`\`\``)
           continue
         }
         budget -= sh.length
-        shown.push(sh)
+        shown.push(`\`\`\`${lang}\n${sh}\n\`\`\``)
       }
-      out.push(`GLSL found in this script, in source order. These are pieces the code joins into the vertex and fragment shaders (headers with uniforms, shared functions, main()); read the file around them to see how they are combined and which uniforms are set each frame:\n${shown.map((sh) => `\`\`\`glsl\n${sh}\n\`\`\``).join('\n')}`)
+      out.push(`Shader code found in this script, in source order. These are pieces the code joins into the shaders (headers with uniforms, shared functions, the entry point); read the file around them to see how they are combined and which uniforms are set each frame:\n${shown.join('\n')}`)
+    }
+    if (c.unreachable?.length) {
+      out.push(`It loads ${c.unreachable.length === 1 ? 'a chunk' : 'chunks'} that couldn't be fetched (cross-origin without CORS, or gone), so ${c.unreachable.length === 1 ? 'its' : 'their'} code isn't here:\n${c.unreachable.map((u) => `- <${u}>`).join('\n')}`)
     }
     return out.join('\n\n')
   })
+  const missing = refs.some((c) => c.unreachable?.length) && !refs.some((c) => c.shaders.length)
   return `## Canvas source code (from the page's scripts)
-Some canvases draw with code the capture couldn't watch run (a Web Worker, or WebGL set up before JevElements loaded). Their original code ships in the page's scripts, found below${refs.some((c) => c.file) ? ' and saved in `public/reference/code/` so you can read the whole file' : ''}. Port it into the rebuild (a client component with a \`<canvas>\` of the same size and a WebGL context, in a Web Worker or not): keep the GLSL exactly as written, set the same uniforms, and drive time the same way. Rename minified identifiers to readable names. Compare against the canvas snapshot under **Canvas, WebGL & embeds**.
+Some canvases draw with code the capture couldn't watch run (a Web Worker, or WebGL/WebGPU set up before JevElements loaded). Their original code ships in the page's scripts, found below${refs.some((c) => c.file) ? ' and saved in `public/reference/code/` so you can read the whole file' : ''}: the component that renders the canvas, and the chunks it loads that hold the shaders. Port it as described under **Shaders: build them with vgpu**: keep every shader's math, constants and colors as written, set the same uniforms, and drive time and the pointer the same way. Rename minified identifiers to readable names. Compare against the canvas snapshot under **Canvas, WebGL & embeds**.${
+    missing
+      ? ' The shader chunk itself could not be fetched (listed below). Write the shader from the snapshot, the **Pointer hover** and **Click sweep** findings, and what the component passes in (uniform names, colors, sizes), and tell the user it was recreated rather than ported.'
+      : ''
+  }
 
 ${parts.join('\n\n')}`
 }
@@ -877,11 +1183,14 @@ function installSection(capture: Capture, kit: string, plan: MediaPlan): string 
 
   const shot = saved?.screenshot && saved.uploaded.includes(`reference/${saved.screenshot}`) ? saved.screenshot : undefined
   const codeFiles = (capture.code ?? []).filter((c) => c.file).length
+  const fontFiles = saved?.uploaded.filter((p) => p.startsWith('fonts/')).length ?? 0
   const what = [
     `\`components/${file}.tsx\`: the placeholder \`${component}\` to replace with the section; \`app/page.tsx\` already renders it`,
     '`app/globals.css` (Tailwind CSS v4), `app/layout.tsx`, `package.json`, `tsconfig.json` (`@/*` alias)',
     plan.archived.size ? `\`public/capture/\`: the ${plan.archived.size} file${plan.archived.size === 1 ? '' : 's'} the section shows (images, video, canvas snapshots, textures, models), downloaded from the live page` : '',
     shot ? `\`public/reference/${shot}\`: the screenshot attached to this message` : '',
+    fontFiles ? `\`public/fonts/\`: the site's ${fontFiles} font file${fontFiles === 1 ? '' : 's'} (see **Fonts**)` : '',
+    capture.schemes?.files ? `\`public/reference/${capture.schemes.files.light}\` and \`${capture.schemes.files.dark}\`: the section under the light and the dark OS colour scheme (see **Theme / dark mode**); reference only` : '',
     codeFiles ? `\`public/reference/code/\`: ${codeFiles} script${codeFiles === 1 ? '' : 's'} from the page with the canvas drawing code (see **Canvas source code**)` : '',
     hoverFrames(capture).length ? `\`public/reference/hover-sweep-*.jpg\` and \`click-sweep-*.jpg\`: frames of the hover and click sweeps (see **Pointer hover** and **Click sweep**); reference only, like the screenshot` : '',
     '`PROMPT.md`: this prompt',
@@ -942,6 +1251,7 @@ function mediaLine(a: Asset, local: string | undefined): string {
   const file = local ? `\`public/capture/${local}\` (from ${source})` : missing
   const when = a.when ? `, **shown ${a.when}**` : ''
   let line = `- ${a.kind} on \`${a.target}\`: ${file}${size}${natural}${a.alt ? `, alt ${inlineCode(a.alt)}` : ''}${when}`
+  if (a.look) line += `\n  - ${lookLine(a.look)}`
   if (a.srcset) line += `\n  - srcset on the site (reference only; serve the local file): ${inlineCode(a.srcset)}`
   for (const s of a.sources ?? []) {
     const bits = [s.media && `media ${inlineCode(s.media)}`, s.type && `type ${inlineCode(s.type)}`, `srcset ${inlineCode(s.srcset)}`].filter(Boolean)
@@ -950,10 +1260,22 @@ function mediaLine(a: Asset, local: string | undefined): string {
   return line
 }
 
+// Filter, blend mode and effective opacity of the element showing an image or SVG, and opacity the SVG
+// carries itself, so faded or inverted artwork is matched without double-applying anything.
+function lookLine(look: AssetLook): string {
+  const chain = look.chain ? ` (${look.chain.join(' × ')})` : ''
+  let line = `drawn with filter \`${look.filter}\`, mix-blend-mode \`${look.blend}\`, effective opacity ${look.opacity}${chain}: its own opacity times every ancestor's up to the section, from CSS.`
+  if (look.svgOpacity?.length) {
+    const from = look.svgSource === 'file' ? 'file' : 'markup'
+    line += ` The SVG ${from} itself sets ${look.svgOpacity.join('; ')}. That comes from the ${from}, not CSS: use the ${from} as it is and don't add that opacity again in CSS.`
+  }
+  return line
+}
+
 function svgSection(svgs: Asset[]): string {
   let budget = INLINE_SVG_BUDGET
   const items = svgs.map((s) => {
-    const head = `${s.target} (${s.width}×${s.height}px)`
+    const head = `${s.target} (${s.width}×${s.height}px)${s.look ? `, ${lookLine(s.look)} Markup` : ''}`
     if (s.src.length <= INLINE_SVG_MAX && s.src.length <= budget) {
       budget -= s.src.length
       return `${head}:\n\`\`\`svg\n${s.src}\n\`\`\``

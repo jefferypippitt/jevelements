@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Click and drag sweep test</title>
+    <!-- The click sweep's press, drag and small reactions (src/content/sweep.ts): pnpm test:build, node
+         test/serve.mjs, then open /test/drag.html and run
+         JevTest.inspectRuntime(hero).then(() => JevTest.sweepClicks(hero)). -->
+    <script src="/dist/probe.js"></script>
+    <script src="/test/dist/pipeline.js"></script>
+    <style>
+      body { margin: 0; font-family: system-ui; background: #000; color: #fff; }
+      #bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; }
+      #hero { position: relative; z-index: 1; height: 560px; padding: 24px; box-sizing: border-box; }
+      #spin { display: block; width: 520px; height: 360px; }
+    </style>
+  </head>
+  <body>
+    <!-- A page-wide background outside the section: a small burst wherever the page is clicked. -->
+    <canvas id="bg"></canvas>
+    <section id="hero">
+      <!-- Drag to spin, as OrbitControls does: pointer capture, a rate per px, inertia after release.
+           It also follows the pointer's position, which a drag must not be credited with. -->
+      <canvas id="spin"></canvas>
+    </section>
+    <script>
+      const hero = document.getElementById('hero')
+      const bg = document.getElementById('bg')
+      bg.width = innerWidth
+      bg.height = innerHeight
+      const g = bg.getContext('2d')
+      const bursts = []
+      window.addEventListener('click', (e) => bursts.push({ x: e.clientX, y: e.clientY, t: performance.now() }))
+      const paint = (now) => {
+        g.fillStyle = '#000'
+        g.fillRect(0, 0, bg.width, bg.height)
+        for (const b of bursts) {
+          const age = (now - b.t) / 600
+          if (age >= 1) continue
+          g.fillStyle = `rgba(250, 204, 21, ${1 - age})`
+          g.beginPath()
+          g.arc(b.x, b.y, 6 + age * 20, 0, Math.PI * 2)
+          g.fill()
+        }
+        requestAnimationFrame(paint)
+      }
+      requestAnimationFrame(paint)
+
+      const canvas = document.getElementById('spin')
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = 520 * dpr
+      canvas.height = 360 * dpr
+      const gl = canvas.getContext('webgl')
+      const compile = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s }
+      const program = gl.createProgram()
+      gl.attachShader(program, compile(gl.VERTEX_SHADER, 'attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }'))
+      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, `
+        precision highp float;
+        uniform vec2 u_res; uniform float u_angle; uniform vec2 u_mouse;
+        void main(){
+          vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;
+          float c = cos(u_angle), s = sin(u_angle);
+          vec2 q = mat2(c, -s, s, c) * uv;
+          float box = step(max(abs(q.x), abs(q.y)), 0.25);
+          float glow = 0.15 * smoothstep(0.3, 0.0, distance(gl_FragCoord.xy / u_res, u_mouse));
+          gl_FragColor = vec4(vec3(0.1) + box * vec3(0.2, 0.6, 0.9) + glow, 1.0);
+        }`))
+      gl.linkProgram(program)
+      gl.useProgram(program)
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
+      const loc = gl.getAttribLocation(program, 'p')
+      gl.enableVertexAttribArray(loc)
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
+      const uRes = gl.getUniformLocation(program, 'u_res')
+      const uAngle = gl.getUniformLocation(program, 'u_angle')
+      const uMouse = gl.getUniformLocation(program, 'u_mouse')
+      let angle = 0
+      let velocity = 0
+      let dragging = false
+      let lastX = 0
+      const mouse = [0.5, 0.5]
+      canvas.addEventListener('pointerdown', (e) => {
+        canvas.setPointerCapture(e.pointerId)
+        dragging = true
+        lastX = e.clientX
+        velocity = 0
+      })
+      canvas.addEventListener('pointermove', (e) => {
+        const r = canvas.getBoundingClientRect()
+        mouse[0] = (e.clientX - r.left) / r.width
+        mouse[1] = 1 - (e.clientY - r.top) / r.height
+        if (!dragging) return
+        velocity = (e.clientX - lastX) * 0.01
+        angle += velocity
+        lastX = e.clientX
+      })
+      canvas.addEventListener('pointerup', (e) => {
+        dragging = false
+        canvas.releasePointerCapture(e.pointerId)
+      })
+      const draw = () => {
+        if (!dragging) {
+          angle += velocity
+          velocity *= 0.95
+        }
+        gl.viewport(0, 0, canvas.width, canvas.height)
+        gl.uniform2f(uRes, canvas.width, canvas.height)
+        gl.uniform1f(uAngle, angle)
+        gl.uniform2f(uMouse, mouse[0], mouse[1])
+        gl.drawArrays(gl.TRIANGLES, 0, 3)
+        requestAnimationFrame(draw)
+      }
+      requestAnimationFrame(draw)
+    </script>
+  </body>
+</html>

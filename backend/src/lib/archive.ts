@@ -1,5 +1,5 @@
 // A capture as one Next.js app zip, everything under a single `<name>/` folder: the scaffold
-// (scaffold.ts), PROMPT.md, and public/ with the files the extension saved — media → public/capture/,
+// (scaffold.ts), PROMPT.md, and public/ with the files the extension saved — media → public/capture/, fonts → public/fonts/,
 // the screenshot → public/reference/, canvas source code → public/reference/code/. Extracting it gives
 // a ready app; nothing is written anywhere but the response.
 import { readFile } from 'node:fs/promises'
@@ -10,7 +10,7 @@ import { captureDir, FOLDERS, listFiles, readProject, type Folder } from './stor
 
 // Paths the prompt refers to (/capture/…, /reference/…), so keep them in sync with
 // frontend/jevelements/src/shared/prompt.ts.
-const DIRS: Record<Folder, string> = { media: 'public/capture', frames: 'public/reference', code: 'public/reference/code' }
+const DIRS: Record<Folder, string> = { media: 'public/capture', frames: 'public/reference', code: 'public/reference/code', fonts: 'public/fonts' }
 
 // Until the extension sends project.json, the files still download as a generic app.
 const FALLBACK = { name: 'section', component: 'Section', file: 'section', prompt: '' }

@@ -1,8 +1,9 @@
 // Saves the real files the section shows, so the rebuild never needs a placeholder: every image and
 // video (including the ones the scroll story and hovers swap in), the canvas snapshots, the textures,
-// models and animation files that canvases and WebGL scenes draw from, the scripts holding canvas code,
-// the one screenshot, and the frames of the hover and click sweeps. The backend ships them in the
-// public/ folder of the app zip.
+// models and animation files that canvases and WebGL scenes draw from, the site's @font-face files, the
+// scripts holding canvas code, the one screenshot (and its light/dark pair when the section reacts to the
+// OS colour scheme), and the frames of the hover and click sweeps. The backend ships them in the public/
+// folder of the app zip.
 //
 // The service worker downloads each URL (it has host access to every site, so CORS doesn't apply) and
 // uploads it straight to the backend. What it can't get (hotlink protection that wants the site's
@@ -14,7 +15,8 @@ import type { Asset, BackgroundMessage, Capture, SaveMediaResponse, SavedFiles, 
 import type { Shot } from './frames'
 
 const MEDIA_KINDS = new Set<Asset['kind']>(['image', 'background', 'mask', 'video', 'poster'])
-// Files the page's scripts loaded for a canvas, WebGL scene or animation (fonts and stream manifests aren't saved).
+// Files the page's scripts loaded for a canvas, WebGL scene or animation (stream manifests aren't saved;
+// fonts come from the @font-face rules instead, into public/fonts/).
 const SCENE_FILE_RE = /\.(riv|lottie|glb|gltf|bin|drc|splinecode|hdr|exr|ktx2|basis|usdz|fbx|obj|glsl|frag|vert|wgsl)(\?|#|$)|lottie.*\.json|\.json.*lottie/i
 const PAGE_FETCH_TIMEOUT_MS = 30_000
 const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024 // ~11 MB of base64 per message, well under Chrome's 64 MB cap
@@ -136,6 +138,15 @@ async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles,
     if (/^https?:/.test(src) && !jobs.has(src)) jobs.set(src, { src, name: unique(baseName(src)), assets: [] })
   }
 
+  // The site's font files, for public/fonts/. Sites often serve them without CORS headers (Next.js's
+  // /_next/static/media/*.woff2), so a rebuild that points at the site's URLs silently falls back.
+  const fonts: Job[] = []
+  for (const src of new Set(capture.fonts.flatMap((f) => f.files))) {
+    if (/^https?:/.test(src)) fonts.push({ src, name: unique(baseName(src)), assets: [] })
+  }
+  saved.fonts = {}
+  saved.fontsFailed = []
+
   let uploading = true // cleared once the backend turns out not to be running
   const record = (path: string, result: UploadResult | undefined) => {
     if (!result) return
@@ -154,30 +165,40 @@ async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles,
     record(`capture/${file}`, result)
   }
 
-  const saveOne = async ({ src, name, assets }: Job) => {
+  const fetchOne = async ({ src, name }: Job, folder: 'media' | 'fonts'): Promise<{ file: string; result?: UploadResult } | { reason: string }> => {
     // blob: URLs only exist in this page; everything else tries the service worker first.
     let reason = 'blob: URL could not be read'
     if (!src.startsWith('blob:')) {
-      const res = await ask<SaveMediaResponse>({ type: 'jev:save-media', src, captureId: capture.id, name, upload: uploading })
-      if (!('error' in res)) return done(src, res.file, assets, res.upload)
+      const res = await ask<SaveMediaResponse>({ type: 'jev:save-media', src, captureId: capture.id, name, upload: uploading, folder })
+      if (!('error' in res)) return { file: res.file, result: res.upload }
       reason = res.error
     }
     const got = await fetchInPage(src)
-    if (!got) {
-      saved.failed.push({ src, reason: src.startsWith('blob:') ? reason : `${reason}; from the page: not readable` })
-      return
-    }
+    if (!got) return { reason: src.startsWith('blob:') ? reason : `${reason}; from the page: not readable` }
     const file = `${name}.${got.ext}`
-    done(src, file, assets, uploading ? await upload(capture.id, 'media', file, got.blob) : undefined)
+    return { file, result: uploading ? await upload(capture.id, folder, file, got.blob) : undefined }
+  }
+
+  const saveOne = async (job: Job) => {
+    const got = await fetchOne(job, 'media')
+    if ('reason' in got) saved.failed.push({ src: job.src, reason: got.reason })
+    else done(job.src, got.file, job.assets, got.result)
+  }
+
+  const saveFont = async (job: Job) => {
+    const got = await fetchOne(job, 'fonts')
+    if ('reason' in got) return void saved.fontsFailed!.push({ src: job.src, reason: got.reason })
+    record(`fonts/${got.file}`, got.result)
+    if (saved.uploaded.includes(`fonts/${got.file}`)) saved.fonts![job.src] = got.file
   }
 
   // A few at a time: quick, without starting forty video downloads at once.
-  const queue = Array.from(jobs.values())
+  const queue: (() => Promise<void>)[] = [...Array.from(jobs.values(), (job) => () => saveOne(job)), ...fonts.map((job) => () => saveFont(job))]
   const total = queue.length
   let finished = 0
   const worker = async () => {
     for (let next = queue.shift(); next; next = queue.shift()) {
-      await saveOne(next)
+      await next()
       onProgress?.(++finished, total)
     }
   }
@@ -216,6 +237,19 @@ async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles,
       }
       frame.dataUrl = undefined
     }
+  }
+
+  // The section under the light and the dark OS colour scheme, when they differ (scheme.ts).
+  const schemes = capture.schemes
+  if (schemes?.shots) {
+    if (uploading) {
+      const files = { light: `${unique('section-light')}.png`, dark: `${unique('section-dark')}.png` }
+      for (const [file, data] of [[files.light, schemes.shots.light], [files.dark, schemes.shots.dark]]) {
+        record(`reference/${file}`, await upload(capture.id, 'frames', file, dataUrlBlob(data)))
+      }
+      if (saved.uploaded.includes(`reference/${files.light}`) && saved.uploaded.includes(`reference/${files.dark}`)) schemes.files = files
+    }
+    schemes.shots = undefined
   }
 
   // The screenshot, so the agent can open it from public/reference/ as well as from the message.

@@ -7,6 +7,7 @@ import { PROBE_ACK_EVENT, PROBE_INSPECT_EVENT, PROBE_MARK_ATTR, PROBE_MARK_EVENT
 import { installClock } from './clock'
 import { installNavigationGuard } from './guard'
 import { installWriteGuard } from './writes'
+import { installSchemeEmulation } from './scheme'
 import { installHooks, type HookState } from './hooks'
 import { inspectRuntime } from './inspect'
 import { hookListeners, markHandlers } from './listeners'
@@ -24,6 +25,7 @@ if (!(KEY in window)) {
   installNavigationGuard()
   answerValues(state)
   installWriteGuard()
+  installSchemeEmulation()
   Object.defineProperty(window, KEY, { value: true })
 
   document.addEventListener(PROBE_MARK_EVENT, () => {

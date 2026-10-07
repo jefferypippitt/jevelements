@@ -29,6 +29,24 @@
 }
 .label .dim { opacity: 0.75; font-weight: 400; }
 
+/* The hovered element's parts (parts.ts): dotted boxes inside the blue ring, and the parts of the
+   bigger ones in a fainter line. Under the ring and its label. */
+.part {
+  position: fixed; pointer-events: none; z-index: 2147483645;
+  border: 1px dotted var(--highlight); border-radius: 2px;
+}
+.part.sub { border-color: color-mix(in oklab, var(--highlight) 50%, transparent); }
+/* The name sits just above the box, so it never covers the part; inside it at the top of the screen. */
+.part-tag {
+  position: absolute; bottom: 100%; left: -1px; max-width: calc(100% + 2px);
+  font: 500 10px/1 var(--font-code); color: #fff;
+  background: color-mix(in oklab, var(--highlight) 80%, transparent);
+  padding: 2px 4px; border-radius: 3px 3px 0 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.part.tag-inside .part-tag { bottom: auto; top: 0; left: 0; max-width: 100%; border-radius: 0 0 3px 0; }
+.part.untagged .part-tag { display: none; }
+
 /* ---------- trace: what a capture is playing (trace.ts) ----------
    The picker's ring in pink: dashed around the section or component, solid around the control,
    and around each popup the page opened while it's read. Below the drawer. */
@@ -73,6 +91,9 @@
    and dot. */
 .sweep { --trace: var(--trace-sweep); }
 .sweep-click { --trace: var(--trace-click); }
+/* During a sweep the ring sits outside the swept element, which is screenshotted over and over: no
+   fill, so nothing of the overlay lands in the shots (trace.ts). */
+.trace.outside { background: none; }
 @keyframes trace-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in oklab, var(--trace) 8%, transparent); } }
 @media (prefers-reduced-motion: reduce) {
   .trace-area, .trace, .trace-popup, .trace-label { transition: none; }

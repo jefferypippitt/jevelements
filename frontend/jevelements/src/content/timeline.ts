@@ -95,18 +95,29 @@ function styleSnapshot(el: Element): string[] {
 }
 
 // CSS and WAAPI animations are already described from stylesheets and getAnimations().
-// Style sampling is for libraries that write inline styles every frame.
-function applyStyleMotion(visible: [Element, CapturedNode][], frames: string[][][]) {
+// Style sampling is for libraries that write inline styles every frame. `explained` says when a change
+// is a pointer or focus state settling rather than a script; those are left out and counted.
+function applyStyleMotion(visible: [Element, CapturedNode][], frames: string[][][], explained: (j: number, prop: string) => boolean): number {
+  let settled = 0
   visible.forEach(([, node], j) => {
     const samples = frames[j]
     if (!samples) return
     const changes: string[] = []
     STYLE_PROPS.forEach((prop, k) => {
       const values = Array.from(new Set(samples.map((frame) => showStyle(frame[k] ?? ''))))
-      if (values.length > 1) changes.push(`${prop}: ${values.slice(0, 3).join(' → ')}${values.length > 3 ? ' → …' : ''}`)
+      if (values.length < 2) return
+      if (explained(j, prop)) settled++
+      else changes.push(`${prop}: ${values.slice(0, 3).join(' → ')}${values.length > 3 ? ' → …' : ''}`)
     })
     if (changes.length) node.motion = changes
   })
+  return settled
+}
+
+// A :hover or :focus state rule on the element that sets this property.
+function stateSets(node: CapturedNode, prop: string): boolean {
+  const declared = new RegExp(`(^|;)\\s*${prop}\\s*:`)
+  return !!node.states?.some((s) => /:hover|:focus/.test(s.state) && declared.test(s.declarations))
 }
 
 // `moved` collects the elements that changed while the page sat idle (children, attributes, text), so
@@ -179,8 +190,24 @@ export async function recordSimulation(root: Element, visible: [Element, Capture
     characterData: true,
   })
 
+  // Leftover pointer and focus states (the pointer resting where the section was picked, a focused
+  // control) must not pass for script motion: focus inside the section is cleared first, and changes a
+  // CSS transition made, or that a :hover/:focus rule explains on an element the pointer or focus is on,
+  // are left out.
+  const focused = document.activeElement
+  if (focused && root.contains(focused) && 'blur' in focused) (focused as HTMLElement).blur()
   const styled = visible.filter(([el]) => el.getAnimations().length === 0).slice(0, MAX_STYLE_ELEMENTS)
   const frames: string[][][] = styled.map(([el]) => [styleSnapshot(el)])
+  const pointed = styled.map(([el]) => el.matches(':hover, :focus-within'))
+  const transitioned = new Map<Element, Set<string>>()
+  const onTransition = (e: Event) => {
+    const { target, propertyName } = e as TransitionEvent
+    if (!(target instanceof Element)) return
+    const props = transitioned.get(target) ?? new Set<string>()
+    props.add(propertyName)
+    transitioned.set(target, props)
+  }
+  root.addEventListener('transitionrun', onTransition, true)
 
   try {
     const step = DURATION_MS / SAMPLES
@@ -197,9 +224,10 @@ export async function recordSimulation(root: Element, visible: [Element, Capture
     }
   } finally {
     observer.disconnect()
+    root.removeEventListener('transitionrun', onTransition, true)
   }
 
-  applyStyleMotion(styled, frames)
+  const settled = applyStyleMotion(styled, frames, (j, prop) => !!transitioned.get(styled[j][0])?.has(prop) || (pointed[j] && stateSets(styled[j][1], prop)))
 
   const texts = [...describeTextSeries(log.within(root)), ...splitTextReveals(visible)].slice(0, MAX_TEXT_ANIMATIONS)
   // Text animations are described in full; drop their once-a-second samples.
@@ -212,7 +240,7 @@ export async function recordSimulation(root: Element, visible: [Element, Capture
     .map((b) => ({ t: b.t, target: b.target, change: b.change }))
 
   const styleMoved = styled.some(([, node]) => !!node.motion?.length)
-  return { durationMs: DURATION_MS, events, texts, idle: events.length === 0 && !styleMoved && !texts.length }
+  return { durationMs: DURATION_MS, events, texts, idle: events.length === 0 && !styleMoved && !texts.length, settled: settled || undefined }
 }
 
 // ---------- text animations ----------

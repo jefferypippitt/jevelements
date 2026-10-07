@@ -20,6 +20,10 @@ const TYPES: Record<string, string> = {
   json: 'application/json',
   js: 'text/javascript; charset=utf-8',
   glb: 'model/gltf-binary',
+  woff2: 'font/woff2',
+  woff: 'font/woff',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
   gltf: 'model/gltf+json',
 }
 

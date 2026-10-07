@@ -6,6 +6,11 @@
 // While the hover sweep runs, the same boxes turn green and a dot shows where its virtual pointer is;
 // while the click sweep runs (hidden clicks, clicks over a canvas or the section), they turn amber.
 //
+// The sweeps screenshot the element they sweep dozens of times, so while they run nothing is drawn over
+// it: the rings sit just outside its edge, the label above or below it, and the pointer's position is
+// shown by two markers on its edges, one following x and one following y. Anything that would still
+// cover it (a popup's cover) stays hidden until the sweep ends rather than blinking out for each shot.
+//
 // The boxes sit in the inspector's shadow root with pointer-events: none, so a synthetic click's
 // elementFromPoint passes through them, and the capture skips <jev-inspector> when it looks for portals.
 import { label } from '../shared/dom'
@@ -27,8 +32,21 @@ function box(className: string): HTMLDivElement {
   return div
 }
 
+const RING_GAP = 3 // a sweep's solid ring: px between the swept element and the ring's inner edge
+const AREA_GAP = 8 // the dashed ring around it
+const MARKER_GAP = 12 // from the swept element's edge to a pointer marker's center
+const LABEL_HEIGHT = 24
+
 function place(div: HTMLElement, r: DOMRect) {
   Object.assign(div.style, { display: 'block', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
+}
+
+function grow(r: DOMRect, by: number): DOMRect {
+  return new DOMRect(r.left - by, r.top - by, r.width + by * 2, r.height + by * 2)
+}
+
+function overlaps(a: DOMRect, b: DOMRect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
 }
 
 export class Trace {
@@ -37,6 +55,7 @@ export class Trace {
   private readonly target = box('trace')
   private readonly tag = box('trace-label')
   private readonly dot = box('trace-dot')
+  private readonly dotY = box('trace-dot') // a sweep's second marker, on a vertical edge
   private readonly popups: HTMLDivElement[] = []
   private focus: TraceFocus | null = null
   private frame = 0
@@ -47,7 +66,7 @@ export class Trace {
   constructor(root: ShadowRoot) {
     this.root = root
     this.atStart = new Map(Array.from(document.body?.children ?? []).map((el) => [el, el.childElementCount]))
-    root.append(this.area, this.target, this.tag, this.dot)
+    root.append(this.area, this.target, this.tag, this.dot, this.dotY)
     this.frame = requestAnimationFrame(this.draw)
   }
 
@@ -57,7 +76,7 @@ export class Trace {
 
   stop() {
     cancelAnimationFrame(this.frame)
-    for (const div of [this.area, this.target, this.tag, this.dot, ...this.popups]) div.remove()
+    for (const div of [this.area, this.target, this.tag, this.dot, this.dotY, ...this.popups]) div.remove()
     this.popups.length = 0
     this.focus = null
   }
@@ -77,9 +96,13 @@ export class Trace {
   private draw = () => {
     this.frame = requestAnimationFrame(this.draw)
     const focus = this.focus
+    const sweeping = focus?.action === 'sweep' || focus?.action === 'sweep-click'
     if (!focus || !focus.el.isConnected) {
-      for (const div of [this.area, this.target, this.tag, this.dot]) div.style.display = 'none'
+      for (const div of [this.area, this.target, this.tag, this.dot, this.dotY]) div.style.display = 'none'
+    } else if (sweeping) {
+      this.drawAround(focus)
     } else {
+      this.dotY.style.display = 'none'
       place(this.area, focus.area.getBoundingClientRect())
       const r = focus.el.getBoundingClientRect()
       place(this.target, r)
@@ -100,15 +123,46 @@ export class Trace {
     // Green for the hover sweep, amber for the click sweep, pink for the hover & click pass.
     const sweep = focus?.action === 'sweep'
     const clicks = focus?.action === 'sweep-click'
-    for (const div of [this.area, this.target, this.tag, this.dot, ...this.popups]) {
+    for (const div of [this.area, this.target, this.tag, this.dot, this.dotY, ...this.popups]) {
       div.classList.toggle('sweep', sweep)
       div.classList.toggle('sweep-click', clicks)
+      div.classList.toggle('outside', sweeping)
     }
+    const swept = focus && sweeping && focus.el.isConnected ? focus.el.getBoundingClientRect() : null
     this.popups.forEach((div, i) => {
       const el = open[i]
       if (!el) return void (div.style.display = 'none')
-      place(div, el.getBoundingClientRect())
+      const r = el.getBoundingClientRect()
+      if (swept && overlaps(r, swept)) return void (div.style.display = 'none')
+      place(div, r)
       div.style.display = 'flex' // centers its label
     })
+  }
+
+  // A sweep's marks, all outside the swept element (see the top of the file).
+  private drawAround(focus: TraceFocus) {
+    const r = focus.el.getBoundingClientRect()
+    const ring = grow(r, RING_GAP)
+    place(this.target, ring)
+    if (focus.area === focus.el) this.area.style.display = 'none'
+    else place(this.area, grow(focus.area.getBoundingClientRect(), AREA_GAP))
+
+    const outer = focus.area === focus.el ? ring : grow(focus.area.getBoundingClientRect(), AREA_GAP)
+    this.tag.textContent = `${VERB[focus.action]} ${label(focus.el)}`
+    const above = outer.top - LABEL_HEIGHT - 4
+    const below = outer.bottom + 4
+    const top = above >= 0 ? above : below + LABEL_HEIGHT <= window.innerHeight ? below : null
+    if (top === null) this.tag.style.display = 'none'
+    else Object.assign(this.tag.style, { display: 'block', left: `${Math.max(4, outer.left)}px`, top: `${top}px` })
+
+    // x on the top edge (else the bottom), y on the left edge (else the right); none where it can't fit.
+    const point = focus.point
+    const room = MARKER_GAP + 8
+    const y = r.top >= room ? r.top - MARKER_GAP : r.bottom + room <= window.innerHeight ? r.bottom + MARKER_GAP : null
+    const x = r.left >= room ? r.left - MARKER_GAP : r.right + room <= window.innerWidth ? r.right + MARKER_GAP : null
+    if (point && y !== null) Object.assign(this.dot.style, { display: 'block', left: `${point.x}px`, top: `${y}px` })
+    else this.dot.style.display = 'none'
+    if (point && x !== null) Object.assign(this.dotY.style, { display: 'block', left: `${x}px`, top: `${point.y}px` })
+    else this.dotY.style.display = 'none'
   }
 }

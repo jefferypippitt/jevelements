@@ -12,7 +12,9 @@ import { renderPrompt } from './markdown'
 import { mergeAssets, saveMedia } from './media'
 import { findCanvasCode } from './code'
 import { captureFullSection, initialShot, toPng, type Shot } from './frames'
+import { compareSchemes } from './scheme'
 import OVERLAY_CSS from './overlay.css?inline'
+import { captureParts, PartsLayer } from './parts'
 import { inspectRuntime } from './runtime'
 import { wantsScrollRecording } from './scroll'
 import { endClickSweep, endSweep, hasClickTargets, hasSweepTargets, sweepClicks, sweepHover } from './sweep'
@@ -207,6 +209,7 @@ export class Inspector {
   private shadow: ShadowRoot
   private highlight: HTMLDivElement
   private label: HTMLDivElement
+  private parts: PartsLayer // the hovered element's parts, in dotted boxes
   private toolbar: HTMLDivElement
   private current: Element | null = null
   private childTrail: Element[] = []
@@ -239,6 +242,7 @@ export class Inspector {
       group(kbd('Esc'), 'Exit'),
     ])
     this.shadow.append(el('style', { textContent: OVERLAY_CSS }), this.highlight, this.label)
+    this.parts = new PartsLayer(this.shadow)
   }
 
   toggle() {
@@ -277,6 +281,7 @@ export class Inspector {
     this.toolbar.remove()
     this.highlight.style.display = 'none'
     this.label.style.display = 'none'
+    this.parts.clear()
     this.current = null
     this.childTrail = []
   }
@@ -331,6 +336,7 @@ export class Inspector {
 
   private select(target: Element) {
     this.current = target
+    this.parts.show(target)
     this.reposition()
   }
 
@@ -344,7 +350,10 @@ export class Inspector {
       width: `${r.width}px`,
       height: `${r.height}px`,
     })
-    this.label.replaceChildren(describe(this.current), ' ', el('span', { className: 'dim', textContent: `${Math.round(r.width)}×${Math.round(r.height)}` }))
+    this.parts.place()
+    const parts = this.parts.count
+    const size = `${Math.round(r.width)}×${Math.round(r.height)}${parts ? ` · ${parts} part${parts === 1 ? '' : 's'}` : ''}`
+    this.label.replaceChildren(describe(this.current), ' ', el('span', { className: 'dim', textContent: size }))
     const labelTop = r.top > 26 ? r.top - 24 : Math.min(r.bottom + 4, window.innerHeight - 24)
     Object.assign(this.label.style, { display: 'block', left: `${Math.max(4, r.left)}px`, top: `${labelTop}px` })
   }
@@ -364,7 +373,8 @@ export class Inspector {
 
   private onKey = (e: KeyboardEvent) => {
     const handled = ['Escape', 'ArrowUp', 'ArrowDown', 'Enter']
-    if (!handled.includes(e.key)) return
+    // Only the user's own keys: the capture's undo step dispatches a synthetic Escape (play.ts).
+    if (!e.isTrusted || !handled.includes(e.key)) return
     e.preventDefault()
     e.stopImmediatePropagation()
     if (e.key === 'Escape') return this.stop()
@@ -444,6 +454,8 @@ export class Inspector {
     await nextFrame()
 
     try {
+      // The section's parts as the picker showed them, read before hovers and clicks change anything.
+      const parts = captureParts(target)
       const [{ capture, recordScroll, recordInteractions }, runtime] = await Promise.all([
         captureElement(
           target,
@@ -457,6 +469,7 @@ export class Inspector {
         inspectRuntime(target),
       ])
       capture.screenshot = screenshot
+      if (parts.length) capture.parts = parts
       if (runtime) {
         capture.runtime = runtime
         capture.libraries = runtime.libraries
@@ -519,14 +532,15 @@ export class Inspector {
       // What follows the pointer's position (a shader, a spotlight, a cursor follower, parallax, a tilt)
       // changes with every pixel the pointer moves, which hovering each control above can't see: the
       // pointer is swept over each canvas, and over the section when the page listens for the pointer,
-      // with values and pixels read point by point. The trace shows it in green.
+      // left to right and top to bottom, with values and pixels read every frame. The trace shows it in green.
       if (hasSweepTargets(target)) {
         const before = steps
         const progress = (text: string) => this.showStatus([...before, { label: text, state: 'active' }])
         progress('Sweeping the pointer over the section')
         const trace = new Trace(this.shadow)
         const sweep = await sweepHover(target, {
-          shoot: (r) => this.shootHidden(r),
+          shoot: (r) => this.shootUnder(r),
+          drawerEdge: () => this.drawerEdge(),
           onProgress: progress,
           onFocus: (focus) => trace.show(focus),
         }).finally(() => trace.stop())
@@ -549,7 +563,8 @@ export class Inspector {
         progress('Click sweep over the section')
         const trace = new Trace(this.shadow)
         const sweep = await sweepClicks(target, {
-          shoot: (r) => this.shootHidden(r),
+          shoot: (r) => this.shootUnder(r),
+          drawerEdge: () => this.drawerEdge(),
           onProgress: progress,
           onFocus: (focus) => trace.show(focus),
         }).finally(() => trace.stop())
@@ -562,6 +577,23 @@ export class Inspector {
             : 'Click sweep skipped'
         steps = [...before, { label, state: 'done' }]
       } else endClickSweep(target)
+
+      // The section under the light and the dark OS colour scheme (emulated in the page, see scheme.ts),
+      // after the sweeps: focus is cleared before each pass.
+      {
+        steps = [...steps, { label: 'Comparing light and dark mode', state: 'active' }]
+        this.showStatus(steps)
+        const schemes = await compareSchemes(
+          target,
+          (hidden) => (this.host.style.display = hidden ? 'none' : ''),
+          (r) => this.shootRect(r),
+        )
+        capture.schemes = schemes
+        mergeAssets(capture, schemes.media ?? [])
+        schemes.media = undefined
+        const label = schemes.error ? `Light/dark check skipped: ${schemes.error}` : schemes.differs ? 'Dark mode changes the section' : 'Looks the same in light and dark mode'
+        steps = [...steps.slice(0, -1), { label, state: schemes.error ? 'error' : 'done' }]
+      }
 
       // Canvases drawn by code the capture couldn't watch (a Web Worker, or WebGL that started before
       // the probe): find that code in the page's scripts so the rebuild can port it.
@@ -652,17 +684,34 @@ export class Inspector {
     return undefined
   }
 
-  // A screenshot of a viewport rect with the overlay hidden just for it: the canvas sweep takes many,
-  // and the drawer stays up in between.
-  private async shootHidden(rect: { x: number; y: number; w: number; h: number }): Promise<string | undefined> {
-    this.host.style.display = 'none'
-    await nextFrame()
-    await nextFrame()
+  // A screenshot of a viewport rect for the sweeps, which take dozens. The drawer stays on screen the
+  // whole time: the sweeps keep their shots left of it (drawerEdge), so only the overlay's pieces over
+  // the rect are hidden for the shot, and only when there are any. The sweeps' own trace is drawn
+  // outside what they shoot (trace.ts), so it stays on screen instead of blinking with every shot: an
+  // unfilled ring that encloses the rect paints nothing over it.
+  private async shootUnder(rect: { x: number; y: number; w: number; h: number }): Promise<string | undefined> {
+    const over = Array.from(this.shadow.children).filter((child): child is HTMLElement => {
+      if (!(child instanceof HTMLElement) || child.classList.contains('panel') || child.style.visibility === 'hidden') return false
+      const r = child.getBoundingClientRect()
+      const ring = child.classList.contains('outside') && (child.classList.contains('trace') || child.classList.contains('trace-area'))
+      if (ring && r.left < rect.x && r.top < rect.y && r.right > rect.x + rect.w && r.bottom > rect.y + rect.h) return false
+      return r.width > 0 && r.height > 0 && r.left < rect.x + rect.w && r.right > rect.x && r.top < rect.y + rect.h && r.bottom > rect.y
+    })
+    for (const child of over) child.style.visibility = 'hidden'
+    if (over.length) {
+      await nextFrame()
+      await nextFrame()
+    }
     try {
       return await this.shootRect(rect)
     } finally {
-      this.host.style.display = ''
+      for (const child of over) child.style.visibility = ''
     }
+  }
+
+  // Where the open drawers start, from the left of the viewport; the whole width when none is open.
+  private drawerEdge(): number {
+    return Math.min(window.innerWidth, ...this.drawers.map((d) => d.getBoundingClientRect().left))
   }
 
   // One piece of the full-section screenshot (the caller hides the overlay for the whole run).
@@ -801,7 +850,8 @@ export class Inspector {
 
   private onPanelKey = (e: KeyboardEvent) => {
     const top = this.drawers.at(-1)
-    if (e.key === 'Escape' && !this.active && top) this.dismissDrawer(top)
+    // A synthetic Escape is the capture closing a menu it opened (play.ts), not the user.
+    if (e.isTrusted && e.key === 'Escape' && !this.active && top) this.dismissDrawer(top)
   }
 
   // The result drawer leads with the rendered prompt. Copy still sends the original markdown.

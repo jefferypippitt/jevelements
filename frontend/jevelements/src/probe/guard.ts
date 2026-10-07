@@ -7,7 +7,7 @@
 // Same-document changes on the same path (#hash tabs, ?tab=2) are let through: they don't leave
 // the section. Everything else is cancelled when the browser allows it, and its URL is reported on
 // <html> so the content script stops clicking.
-import { PROBE_BLOCKED_ATTR, PROBE_GUARD_ATTR, PROBE_GUARD_EVENT } from '../shared/runtime'
+import { PROBE_BLOCKED_ATTR, PROBE_BLOCKED_TARGET_ATTR, PROBE_GUARD_ATTR, PROBE_GUARD_EVENT } from '../shared/runtime'
 
 const SAFETY_MS = 90_000 // turns itself off if the content script never does (it crashed, the tab was reloaded)
 
@@ -20,6 +20,7 @@ export function installNavigationGuard() {
     on = value
     clearTimeout(timer)
     html().removeAttribute(PROBE_BLOCKED_ATTR)
+    html().removeAttribute(PROBE_BLOCKED_TARGET_ATTR)
     if (value) {
       html().setAttribute(PROBE_GUARD_ATTR, '')
       timer = window.setTimeout(() => set(false), SAFETY_MS)
@@ -37,12 +38,20 @@ export function installNavigationGuard() {
     if (e.destination.sameDocument && to.origin === location.origin && to.pathname === location.pathname) return
     if (e.cancelable) e.preventDefault()
     html().setAttribute(PROBE_BLOCKED_ATTR, e.destination.url)
+    html().setAttribute(PROBE_BLOCKED_TARGET_ATTR, '_self')
   })
 
   const open = window.open
   window.open = function (this: Window, ...args: Parameters<typeof window.open>) {
     if (!on) return open.apply(this, args)
-    html().setAttribute(PROBE_BLOCKED_ATTR, String(args[0] ?? 'a new window'))
+    let url = 'a new window'
+    try {
+      if (args[0] !== undefined && args[0] !== '') url = new URL(String(args[0]), location.href).href
+    } catch {
+      url = String(args[0])
+    }
+    html().setAttribute(PROBE_BLOCKED_ATTR, url)
+    html().setAttribute(PROBE_BLOCKED_TARGET_ATTR, args[1] ? String(args[1]) : '_blank')
     return null
   }
 }

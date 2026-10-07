@@ -3,6 +3,7 @@
 // SVGs, animations (CSS, Web Animations, and JS-driven motion), and canvas/WebGL/embeds.
 import type {
   Asset,
+  AssetLook,
   Box,
   Capture,
   CapturedNode,
@@ -20,6 +21,7 @@ import { PROBE_ROOT_ATTR } from '../shared/runtime'
 import type { HoverRule } from './hover'
 import { recordInteractions, type InteractionOptions } from './interactions'
 import { recordScrollMotion, type ScrollOptions } from './scroll'
+import { collectVariantRules, conditionalNotes, indexVariants, readTheme, sectionClasses, themeRules, type VariantRule } from './theme'
 import { recordSimulation, TextLog } from './timeline'
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'LINK', 'META', 'BASE', 'HEAD', 'TITLE'])
@@ -311,6 +313,7 @@ const MAX_SIMILAR_SIBLINGS = 4
 const MAX_TEXT = 4000
 const MAX_SVG_ELEMENTS = 5000 // styles are baked per element; beyond this the markup is kept as-is
 const MAX_RESPONSIVE_RULES = 120
+const MAX_THEME_RULES = 60 // dark: rules for the section's classes, added to the responsive rules
 const MAX_STATES_PER_NODE = 8
 const MAX_AUTHORED_PER_NODE = 6
 const MAX_SCRIPT_ANIMATIONS = 40
@@ -346,7 +349,7 @@ function primaryFamily(fontFamily: string): string {
   return fontFamily.split(',')[0].trim().replace(/^["']|["']$/g, '')
 }
 
-function splitSelectors(selectorText: string): string[] {
+export function splitSelectors(selectorText: string): string[] {
   const out: string[] = []
   let depth = 0
   let current = ''
@@ -466,7 +469,7 @@ export function childrenOf(el: Element): Element[] {
   return Array.from((shadow ?? el).children)
 }
 
-function shadowRootsIn(root: Element): ShadowRoot[] {
+export function shadowRootsIn(root: Element): ShadowRoot[] {
   const out: ShadowRoot[] = []
   const visit = (el: Element) => {
     const shadow = el instanceof HTMLElement ? (chrome.dom?.openOrClosedShadowRoot?.(el) ?? el.shadowRoot) : null
@@ -556,6 +559,7 @@ interface SheetScan {
   fontFaces: { family: string; cssText: string; files: string[] }[]
   keyframes: Map<string, string>
   properties: Map<string, string> // @property rules by name
+  variants: VariantRule[] // rules for dark:, group-hover:, aria-*, … classes (theme.ts)
   unreadable: number
 }
 
@@ -587,6 +591,7 @@ async function scanStylesheets(root: Element): Promise<SheetScan> {
     fontFaces: [],
     keyframes: new Map(),
     properties: new Map(),
+    variants: [],
     unreadable: 0,
   }
 
@@ -647,6 +652,7 @@ async function scanStylesheets(root: Element): Promise<SheetScan> {
     const sheetMedia = sheets[i].media?.mediaText
     const media = sheetMedia && sheetMedia !== 'all' && /width|height|orientation/.test(sheetMedia) ? `@media ${sheetMedia}` : null
     walk(result.rules, media, result.base)
+    collectVariantRules(result.rules, scan.variants)
   })
   return scan
 }
@@ -656,6 +662,7 @@ async function scanStylesheets(root: Element): Promise<SheetScan> {
 interface FontUsage {
   weights: Set<string>
   styles: Set<string>
+  others: Set<string> // the families after it in font-family, where a metric-matched fallback sits
 }
 
 interface WalkContext {
@@ -676,6 +683,7 @@ interface WalkContext {
   families: Map<string, FontUsage>
   animationNames: Set<string>
   visible: [Element, CapturedNode][] // for motion sampling
+  variants: Map<string, VariantRule[]> // the rules behind each conditional class in the section
 }
 
 // Offsets that are `auto` (or a no-op 0px on a relative box) and shouldn't be listed.
@@ -965,9 +973,80 @@ async function fetchSprites(root: Element): Promise<Map<string, Document>> {
 
 // ---------- media, embeds ----------
 
+const round3 = (n: number) => Math.round(n * 1000) / 1000
+
+// How the element showing an image or SVG is drawn: its filter and blend mode, and its opacity times
+// every ancestor's up to the section root. An SVG `opacity` attribute on the way is marked as such.
+function lookOf(el: Element, cs: CSSStyleDeclaration, root: Element | undefined): AssetLook {
+  let opacity = 1
+  const chain: string[] = []
+  for (let cur: Element | null = el; cur; cur = cur.parentElement ?? ((cur.getRootNode() as ShadowRoot).host ?? null)) {
+    const own = parseFloat((cur === el ? cs : getComputedStyle(cur)).opacity)
+    if (own < 1) {
+      opacity *= own
+      chain.push(`\`${label(cur)}\` ${round3(own)}${cur.getAttribute('opacity') !== null ? ' (its opacity attribute)' : ''}`)
+    }
+    if (!root || cur === root) break
+  }
+  return { filter: cs.filter, blend: cs.mixBlendMode, opacity: round3(opacity), chain: chain.length ? chain : undefined }
+}
+
+const OPACITY_ATTRS = new Set(['opacity', 'fill-opacity', 'stroke-opacity', 'stop-opacity'])
+
+// Opacity written into SVG markup, grouped: `opacity="0.4"` on 12 <path>, 1 <g>. Style attributes count
+// too (`style="opacity: .4"`): they travel with the file just the same.
+function opacityAttributes(elements: [string, Iterable<{ name: string; value: string }>][]): string[] {
+  const counts = new Map<string, Map<string, number>>()
+  const add = (key: string, tag: string) => {
+    const tags = counts.get(key) ?? new Map<string, number>()
+    tags.set(tag, (tags.get(tag) ?? 0) + 1)
+    counts.set(key, tags)
+  }
+  for (const [tag, attrs] of elements) {
+    for (const { name, value } of attrs) {
+      if (OPACITY_ATTRS.has(name) && parseFloat(value) !== 1) add(`${name}="${value.trim()}"`, tag)
+      if (name === 'style') for (const m of value.matchAll(/(?:^|;)\s*((?:fill-|stroke-|stop-)?opacity)\s*:\s*([^;]+)/g)) if (parseFloat(m[2]) !== 1) add(`style="${m[1]}: ${m[2].trim()}"`, tag)
+    }
+  }
+  return Array.from(counts, ([key, tags]) => `${key} on ${Array.from(tags, ([tag, n]) => `${n} <${tag}>`).join(', ')}`).slice(0, 8)
+}
+
+const SVG_FILE_RE = /\.svg(\?|#|$)|^data:image\/svg\+xml/i
+const MAX_SVG_FILES = 30
+
+// <img> SVGs: the file can carry its own opacity (`<path opacity=".12">`), which the rebuild gets by
+// using the file, not from CSS. Read here, in the page, where the file is same-origin.
+async function readSvgFileOpacity(assets: Asset[]) {
+  const files = assets.filter((a) => a.kind === 'image' && a.look && SVG_FILE_RE.test(a.src)).slice(0, MAX_SVG_FILES)
+  await Promise.all(
+    files.map(async (asset) => {
+      try {
+        let text: string
+        if (asset.src.startsWith('data:')) {
+          const [head, body] = [asset.src.slice(0, asset.src.indexOf(',')), asset.src.slice(asset.src.indexOf(',') + 1)]
+          text = /;base64/i.test(head) ? atob(body) : decodeURIComponent(body)
+        } else {
+          const res = await fetch(asset.src, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+          if (!res.ok) return
+          text = await res.text()
+        }
+        const elements = Array.from(text.matchAll(/<([a-zA-Z][\w:-]*)\b([^>]*)>/g), (m) => {
+          const attrs = Array.from(m[2].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g), (a) => ({ name: a[1], value: a[2] ?? a[3] ?? '' }))
+          return [m[1], attrs] as [string, { name: string; value: string }[]]
+        })
+        const found = opacityAttributes(elements)
+        if (found.length && asset.look) Object.assign(asset.look, { svgOpacity: found, svgSource: 'file' })
+      } catch {
+        // cross-origin without CORS, or not text
+      }
+    }),
+  )
+}
+
 function collectMedia(el: Element, cs: CSSStyleDeclaration, box: Box, ctx: WalkContext) {
   const target = label(el)
   const size = { width: box.w, height: box.h }
+  const look = lookOf(el, cs, ctx.root)
   if (el instanceof HTMLImageElement) {
     // Lazy images keep their real URL in a data attribute and show a placeholder until they scroll
     // into view: a 1×1 data: GIF, or a tiny blurred version (LQIP) stretched to the full size.
@@ -997,6 +1076,7 @@ function collectMedia(el: Element, cs: CSSStyleDeclaration, box: Box, ctx: WalkC
       naturalHeight: el.naturalHeight || undefined,
       srcset,
       sources: sources.length ? sources : undefined,
+      look,
     })
   } else if (el instanceof HTMLVideoElement) {
     const stream = ctx.streams.get(el)
@@ -1010,7 +1090,7 @@ function collectMedia(el: Element, cs: CSSStyleDeclaration, box: Box, ctx: WalkC
   // A background on an <img> that has loaded is its blur-up placeholder (next/image placeholder="blur",
   // Gatsby, …), not part of the design.
   const blurUp = el instanceof HTMLImageElement && el.complete && el.naturalWidth > 2
-  if (!blurUp) for (const url of cssUrls(cs.backgroundImage)) ctx.assets.push({ kind: 'background', src: absolute(url), target, ...size })
+  if (!blurUp) for (const url of cssUrls(cs.backgroundImage)) ctx.assets.push({ kind: 'background', src: absolute(url), target, ...size, look: { ...look } })
   for (const url of cssUrls(cs.maskImage)) ctx.assets.push({ kind: 'mask', src: absolute(url), target, ...size })
   for (const url of cssUrls(cs.borderImageSource)) ctx.assets.push({ kind: 'background', src: absolute(url), target: `${target} (border-image)`, ...size })
   const lazyBg = el.getAttribute('data-bg') ?? el.getAttribute('data-background')
@@ -1035,7 +1115,7 @@ function largestCandidate(srcset: string): string | undefined {
 // Media in the section as it is now. After the scroll recording, lazy images and videos that only load
 // when scrolled into view have their real URLs.
 export function collectSectionMedia(root: Element): Asset[] {
-  const ctx = { assets: [] as Asset[], streams: new Map<HTMLVideoElement, string>() } as unknown as WalkContext
+  const ctx = { root, assets: [] as Asset[], streams: new Map<HTMLVideoElement, string>() } as unknown as WalkContext
   for (const el of [root, ...Array.from(root.querySelectorAll('*'))]) {
     if (SKIP_TAGS.has(el.tagName) || el instanceof SVGElement) continue
     const r = el.getBoundingClientRect()
@@ -1330,11 +1410,15 @@ function walk(el: Element, parentCs: CSSStyleDeclaration | null, ctx: WalkContex
 
   if (node.text) {
     const family = primaryFamily(cs.fontFamily)
-    const usage = ctx.families.get(family) ?? { weights: new Set<string>(), styles: new Set<string>() }
+    const usage = ctx.families.get(family) ?? { weights: new Set<string>(), styles: new Set<string>(), others: new Set<string>() }
     usage.weights.add(cs.fontWeight)
     usage.styles.add(cs.fontStyle)
+    for (const other of cs.fontFamily.split(',').slice(1)) usage.others.add(other.trim().replace(/^["']|["']$/g, ''))
     ctx.families.set(family, usage)
   }
+
+  const conditional = conditionalNotes(el, ctx.variants)
+  if (conditional.length) node.conditional = conditional
 
   if (!hidden && cs.opacity === '0') node.note = 'opacity 0 when captured: probably revealed by an entrance or scroll animation'
 
@@ -1344,7 +1428,10 @@ function walk(el: Element, parentCs: CSSStyleDeclaration | null, ctx: WalkContex
     node.note = `inline SVG #${ctx.svgCount}`
     const lottie = el.querySelector('[id^="__lottie_element"], [clip-path*="__lottie_element"]')
     if (lottie) addEmbed(el, node, ctx, 'Lottie animation (rendered as SVG)', 'lottie-web draws each frame into this SVG, so the markup is one frozen frame. Play the original animation JSON instead (look for it under "Files loaded by the page\'s scripts").')
-    ctx.assets.push({ kind: 'svg', src: markup, target: `SVG #${ctx.svgCount}`, width: box.w, height: box.h, alt: `SVG #${ctx.svgCount}` })
+    const look = lookOf(el, cs, ctx.root)
+    const svgOpacity = opacityAttributes([el, ...Array.from(el.querySelectorAll('*'))].map((n) => [n.tagName.toLowerCase(), n.attributes]))
+    if (svgOpacity.length) Object.assign(look, { svgOpacity, svgSource: 'markup' })
+    ctx.assets.push({ kind: 'svg', src: markup, target: `SVG #${ctx.svgCount}`, width: box.w, height: box.h, alt: `SVG #${ctx.svgCount}`, look })
     return node
   }
   detectEmbed(el, node, ctx)
@@ -1474,6 +1561,13 @@ function collectFonts(families: Map<string, FontUsage>, scan: SheetScan): FontIn
   return Array.from(families, ([family, usage]) => {
     const faces = scan.fontFaces.filter((f) => f.family.toLowerCase() === family.toLowerCase())
     const linked = links.filter((l) => l.toLowerCase().includes(family.toLowerCase().replace(/\s+/g, '+')))
+    // A metric-matched fallback later in the stack: next/font's "<Family> Fallback", a local() face with
+    // size-adjust and ascent-override, so the text keeps its size while the font loads or if it fails.
+    const others = new Set(Array.from(usage.others, (f) => f.toLowerCase()))
+    const fallback = scan.fontFaces
+      .filter((f) => others.has(f.family.toLowerCase()) && (/fallback/i.test(f.family) || (!f.files.length && /local\(|size-adjust|ascent-override/.test(f.cssText))))
+      .map((f) => f.cssText)
+      .slice(0, 4)
     return {
       family,
       weights: Array.from(usage.weights).sort(),
@@ -1481,6 +1575,7 @@ function collectFonts(families: Map<string, FontUsage>, scan: SheetScan): FontIn
       links: linked,
       faces: faces.map((f) => f.cssText).slice(0, 12),
       files: Array.from(new Set(faces.flatMap((f) => f.files))).slice(0, 12),
+      fallback: fallback.length ? fallback : undefined,
     }
   })
 }
@@ -1527,6 +1622,7 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
   scan.stateSelectors = scan.stateSelectors.filter((r) => inSection(r.matchable))
   scan.pseudoRules = scan.pseudoRules.filter((r) => inSection(r.matchable))
   scan.authoredRules = scan.authoredRules.filter((r) => r.matchable.some(inSection))
+  const present = sectionClasses(root)
   const hoverRules: HoverRule[] = scan.stateSelectors.filter((r) => r.state.includes(':hover')).map(({ selector, media, declarations }) => ({ selector, media, declarations }))
 
   const ctx: WalkContext = {
@@ -1547,14 +1643,18 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
     families: new Map(),
     animationNames: new Set(),
     visible: [],
+    variants: indexVariants(scan.variants, present),
   }
 
   try {
     const tree = walk(root, null, ctx)!
+    // Read before the idle watch and the hover and click passes, so it's the theme the page loaded with.
+    const theme = readTheme(root, scan.variants, present)
     const animations = collectScriptAnimations(root)
     onPhase?.('watching')
     const moved = new Set<Element>() // changed by itself during the idle watch
-    const simulation = await recordSimulation(root, ctx.visible, textLog, moved)
+    // The idle watch runs before the hover and click passes, so leftover pointer states can't pass for motion.
+    const [simulation] = await Promise.all([recordSimulation(root, ctx.visible, textLog, moved), readSvgFileOpacity(ctx.assets)])
 
     const authored: string[] = []
     const gather = (n: CapturedNode) => {
@@ -1582,6 +1682,9 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
       return true
     })
 
+    const responsive = collectResponsive(root, scan)
+    responsive.push(...themeRules(scan.variants, present, responsive, MAX_THEME_RULES))
+
     const capture: Capture = {
       id: crypto.randomUUID(),
       url: location.href,
@@ -1592,7 +1695,7 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
       root: tree,
       assets,
       fonts: collectFonts(ctx.families, scan),
-      responsive: collectResponsive(root, scan),
+      responsive,
       keyframes: collectKeyframes(ctx.animationNames, scan, authored),
       animations,
       libraries: [],
@@ -1603,6 +1706,7 @@ export async function captureElement(root: Element, onPhase?: (phase: 'reading' 
       truncated: ctx.truncated,
       unreadableStylesheets: scan.unreadable,
       simulation,
+      theme,
     }
     return {
       capture,

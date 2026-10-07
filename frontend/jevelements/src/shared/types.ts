@@ -33,6 +33,9 @@ export interface CapturedNode {
   hidden?: boolean // display:none when captured (inactive tab, closed menu, …): no box, but styles are exact
   motion?: string[] // properties that changed while the page sat idle, i.e. animated by JavaScript
   scroll?: string[] // properties that changed while the section was scrolled through the viewport
+  // Conditional classes (dark:, group-hover:, peer-*, aria-*, data-[…]:, supports-*) whose rule was not
+  // applying when captured, with what it needs and the value that showed instead (content/theme.ts).
+  conditional?: string[]
   note?: string
   children: CapturedNode[]
 }
@@ -58,6 +61,18 @@ export interface Asset {
   // One frame of an image sequence (frame_0001.jpg … frame_0240.jpg) that a script draws, usually onto
   // a canvas, as the page scrolls.
   sequence?: { id: number; index: number; count: number }
+  look?: AssetLook // images and SVGs: how the element showing it is drawn
+}
+
+// What sits between a file and the pixels: a filter, a blend mode, and opacity from the element and its
+// ancestors. An SVG file can also carry its own opacity attributes, which the rebuild gets for free.
+export interface AssetLook {
+  filter: string // computed, `none` when unset
+  blend: string // mix-blend-mode
+  opacity: number // effective: the element's own opacity times every ancestor's, up to the section root
+  chain?: string[] // where opacity below 1 comes from: "`div.wrap` 0.5"
+  svgOpacity?: string[] // opacity attributes inside the SVG itself: `opacity="0.4"` on 12 <path>
+  svgSource?: 'file' | 'markup' // svgOpacity was read from the downloaded .svg file, or the inline markup
 }
 
 export interface FontInfo {
@@ -67,12 +82,47 @@ export interface FontInfo {
   links: string[] // font stylesheet links (Google Fonts, Adobe Fonts, …)
   faces: string[] // the site's @font-face rules for this family, with absolute URLs
   files: string[] // font file URLs from those rules
+  fallback?: string[] // the site's metric-matched fallback faces (next/font's "<Family> Fallback" with size-adjust, ascent-override)
 }
 
 export interface ResponsiveRule {
-  media: string
+  media: string // the @media/@container condition, or for a selector variant what it needs
   selector: string
   declarations: string
+  kind?: 'selector' // a theme variant switched by a selector (`.dark\:invert:is(.dark *)`), not a media query
+}
+
+// ---------- theme (src/content/theme.ts, src/content/scheme.ts) ----------
+// How the site turns its `dark:` styles on, and whether the section reacts to the OS colour scheme.
+
+export interface DarkVariant {
+  kind: 'class' | 'attribute' | 'media'
+  trigger: string // ".dark", "[data-theme=dark]", "@media (prefers-color-scheme: dark)"
+  example: string // one compiled rule's selector (and condition), as the site wrote it
+  rules: number // compiled `dark:` rules that use this trigger
+  active: boolean // the section sat under the trigger when captured (or the OS matched the query)
+}
+
+export interface ThemeInfo {
+  html: Record<string, string> // class, data-theme, style, … on <html>, when set
+  body: Record<string, string>
+  colorScheme: { html: string; body: string; section: string } // computed color-scheme
+  osDark: boolean // prefers-color-scheme: dark matched while capturing
+  stored?: string // a theme the page keeps in localStorage ("light", "dark", "system")
+  methods: DarkVariant[] // how `dark:` is switched, most rules first; empty when the CSS has no dark: rules
+  darkClasses: number // elements in the section that carry a dark: class
+}
+
+// The section captured once under each OS colour scheme, emulated in the page (content/scheme.ts).
+export interface SchemeCheck {
+  differs: boolean
+  differences: string[] // "`img.logo` filter: none → invert(1)"
+  pixels?: string // how many pixels changed between light and dark, against two light shots
+  shots?: { light: string; dark: string } // PNG data URLs, until uploaded (media.ts)
+  files?: { light: string; dark: string } // names in public/reference/
+  media?: Asset[] // images only the dark scheme shows (<picture> sources for prefers-color-scheme)
+  partial?: string // what the emulation couldn't reach (an unreadable cross-origin sheet, the page's scripts)
+  error?: string // the comparison couldn't run
 }
 
 // An animation created with the Web Animations API (Motion, Framer Motion, GSAP's WAAPI mode, …).
@@ -95,6 +145,7 @@ export interface Simulation {
   events: SimulationEvent[]
   texts: TextAnimation[] // text that a script typed, counted, scrambled or cycled during the watch
   idle: boolean // nothing moved and no script changed the tree
+  settled?: number // style changes left out: a :hover/:focus transition finishing, not a script
 }
 
 // One element's text changing over time, from every DOM mutation during the idle watch, or a
@@ -122,15 +173,16 @@ export interface Embed {
   offscreen?: boolean // a canvas handed to a Web Worker (transferControlToOffscreen): it draws off the main thread
 }
 
-// A script of the page that holds a canvas's drawing code: its shaders (GLSL string literals), or the
-// component that renders the canvas (found by the class names around it). Saved to
-// public/reference/code/<file> so the agent can port the original.
+// A script of the page that holds a canvas's drawing code: its shaders (GLSL or WGSL string literals),
+// the component that renders the canvas (found by the class names around it), or a chunk one of those
+// loads. Saved to public/reference/code/<file> so the agent can port the original.
 export interface CodeRef {
   url: string
   file?: string // name in public/reference/code/, once uploaded
   reasons: string[] // "GLSL shaders", "renders `canvas.block` (matches its container's classes)"
-  shaders: string[] // GLSL literals as written in the script (pieces the code concatenates)
+  shaders: string[] // GLSL or WGSL literals as written in the script (pieces the code concatenates)
   excerpt?: string // the code around the component match
+  unreachable?: string[] // chunks this script loads that couldn't be fetched (cross-origin without CORS, gone)
   size: number
   text?: string // the whole script, until it's uploaded (media.ts)
 }
@@ -161,8 +213,9 @@ export interface ThreeData {
 
 export interface WebGLData {
   target: string // the canvas
-  context: string // "webgl2 {antialias: true, alpha: true, …}"
+  context: string // "webgl2 {antialias: true, alpha: true, …}", or "webgpu"
   programs: ShaderSource[]
+  wgsl?: string[] // WebGPU shader modules (createShaderModule) of the device that draws this canvas
   textures: string[]
 }
 
@@ -329,6 +382,7 @@ export interface InteractionPhase {
 export interface InteractionReport {
   tested: { hover: number; click: number }
   skipped: string[] // left alone on purpose: "button "Delete account" (destructive)"
+  navigates?: string[] // controls whose click leaves the page (cancelled by the guard): "`a.cta` "Watch" opens <url> in a new tab"
   items: Interaction[] // only interactions that changed something
   components?: ComponentStates[] // components whose nested states were explored click by click
   media?: Asset[] // images and videos that hovers and clicks brought on screen; merged into Capture.assets
@@ -337,8 +391,8 @@ export interface InteractionReport {
 // ---------- hover sweep (src/content/sweep.ts) ----------
 // What follows the pointer's position, in a canvas (a shader, a 2D drawing) or in the section's own
 // elements (a cursor follower, a spotlight, parallax layers, tilt cards, a magnetic button): the
-// pointer was held at a grid of points over it (finer where it reacted most), and its values and its
-// pixels were read at each one. Positions are fractions of the swept box from its top-left corner,
+// pointer made one continuous stroke left to right and one top to bottom over it (and over each
+// component with its own pointer effect), and its values and its pixels were read every frame. Positions are fractions of the swept box from its top-left corner,
 // written as percentages.
 
 export interface HoverSweepFrame {
@@ -353,11 +407,11 @@ export interface HoverSweep {
   box: { w: number; h: number }
   values: string // where the values came from: the canvas's renderer, or the elements' styles
   measured: string // how the pixels were read: "read back from the canvas itself", "cropped from screenshots of the tab", or not at all
-  swept: string // the grid, what part of the box it covered, and the finer points
+  swept: string // the strokes, what part of the box they covered, and the components swept on their own
   pointer: string[] // values that follow the pointer, with how they map to its position
   idle: string[] // values that change by themselves (time), so they aren't mistaken for the hover
   motion: string[] // how they get there: easing after a move, on enter, on leave
-  map?: string[] // rows of the pixel-change heat map over the grid
+  map?: string[] // the pixel change along each stroke: left → right, then top → bottom
   hotspots: string[] // the points where the pixels changed most, and which part changed
   frames: HoverSweepFrame[]
   notes: string[]
@@ -366,8 +420,10 @@ export interface HoverSweep {
 // ---------- click sweep (src/content/sweep.ts) ----------
 // What a click does where nothing in the markup is a control: a canvas (a ripple, a burst of
 // particles, picking a 3D object) or the section's own background (click anywhere to change the color).
-// Clicked at a grid of points (never on links, buttons or other controls) with navigation and server
-// writes blocked, each click followed frame by frame.
+// The cursor is read first over a fine grid (a canvas that turns it into a pointer over a shape it
+// draws), then it is clicked where the cursor changed and at a grid of points (never on links, buttons
+// or other controls), with navigation and server writes blocked, each click followed frame by frame.
+// A canvas is also dragged across its middle.
 
 export interface ClickSweep {
   kind: 'canvas' | 'section'
@@ -377,7 +433,11 @@ export interface ClickSweep {
   measured: string // how the pixels were read
   swept: string // how many clicks, where, and what was left out
   reactions: string[] // values a click changes: set to the click point, a pulse, a counter, a toggle
+  drag?: string[] // what a drag across a canvas does beyond moving the pointer: rotate, pan, inertia, spring back
   added: string[] // elements a click adds (a ripple span), and how long they stay
+  cursor?: string[] // where the cursor changes over it: "pointer over 38–62% across, 30–70% down (the shape there)"
+  cursorMap?: string[] // rows of the cursor map over the fine grid
+  navigates?: string[] // where a click leaves the page: "a click at 50% across, 50% down opens <url> in a new tab"
   map?: string[] // rows of the heat map: how much a click at each point changed the pixels
   hotspots: string[]
   frames: HoverSweepFrame[]
@@ -393,6 +453,22 @@ export interface SavedFiles {
   archive?: string // backend URL of the app zip; missing when nothing could be uploaded (backend not running)
   screenshot?: string // name of the one screenshot (the initial look), in public/reference/ when uploaded
   failed: { src: string; reason: string }[]
+  fonts?: Record<string, string> // font file URL → file name in public/fonts/
+  fontsFailed?: { src: string; reason: string }[]
+}
+
+// ---------- parts (src/content/parts.ts) ----------
+// The section's building blocks, as the picker's dotted boxes show them: its parts (wrappers with a
+// single child looked through) and the parts of the bigger ones. Read when the capture starts.
+
+export interface SectionPart {
+  name: string // like the tree's element lines: tag#id.class
+  kind: 'heading' | 'text' | 'media' | 'control' | 'list' | 'nav' | 'header' | 'footer' | 'form' | 'group'
+  box: Box // relative to the section's top-left corner; the first one when it repeats
+  text?: string // its text, shortened
+  repeats?: number // siblings built the same way, in a row (cards, logos): one entry for all of them
+  items?: string[] // the text of each one, when it repeats
+  parts?: SectionPart[]
 }
 
 export interface Capture {
@@ -421,12 +497,15 @@ export interface Capture {
   scrollRecorded?: boolean // nodes carry `scroll` lines from scrolling the section through the viewport
   scrollStory?: ScrollStory // the scroll recording grouped into phases
   interactions?: InteractionReport // hovers and clicks played on the live page
-  hoverSweep?: HoverSweep[] // canvases and the section, where they follow the pointer, swept point by point
+  parts?: SectionPart[] // the section's building blocks, for the component split
+  hoverSweep?: HoverSweep[] // canvases and the section, where they follow the pointer, swept left to right and top to bottom
   clickSweep?: ClickSweep[] // canvases and the section's background, clicked point by point
   code?: CodeRef[] // the page's scripts that draw the section's canvases
   saved?: SavedFiles // media file names and screenshot names the prompt refers to
   project?: CaptureProject // the app zip the extension downloaded
   simulation?: Simulation // idle watch: scripted text, structure, and style changes
+  theme?: ThemeInfo // how dark mode is switched, and the theme at capture
+  schemes?: SchemeCheck // the section under the light and the dark OS colour scheme
   analysis?: SectionAnalysis // added by the backend (typesafe-ai/jev) when enabled
 }
 
@@ -477,11 +556,11 @@ export type AnalyzeMessage = { type: 'jev:analyze'; capture: Capture }
 
 // Downloads one file in the service worker (host access to every site, so no CORS) and, with `upload`,
 // stores it on the backend as media/<name>.<ext>. The bytes go straight from the site to the backend.
-export type SaveMediaMessage = { type: 'jev:save-media'; src: string; captureId: string; name: string; upload: boolean }
+export type SaveMediaMessage = { type: 'jev:save-media'; src: string; captureId: string; name: string; upload: boolean; folder?: 'media' | 'fonts' }
 export type SaveMediaResponse = { file: string; upload?: UploadResult } | { error: string }
 // Bytes only the page could read (blob: URLs, cookie-bound files, canvas snapshots, screenshots), sent
 // on to the backend in base64 chunks. Offset 0 starts the file; later chunks append.
-export type UploadMessage = { type: 'jev:upload'; captureId: string; folder: 'media' | 'frames' | 'code'; name: string; base64: string; offset: number }
+export type UploadMessage = { type: 'jev:upload'; captureId: string; folder: 'media' | 'frames' | 'code' | 'fonts'; name: string; base64: string; offset: number }
 // `archive` is where the rebuild downloads every uploaded file; `unreachable` means the backend isn't running.
 export type UploadResult = { archive: string } | { error: string; unreachable?: boolean }
 

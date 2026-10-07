@@ -1,6 +1,6 @@
 // Files the extension saved for a capture: the real images, videos, canvas snapshots, textures and
 // models the section showed (media/), its screenshot (frames/), and the page scripts holding its
-// canvas code (code/). The extension's service worker downloads them from the live site, where
+// canvas code (code/), and the site's font files (fonts/). The service worker downloads them from the live site, where
 // neither CORS nor hotlink protection gets in the way, and uploads them here. project.json holds the
 // app's name and prompt; archive.ts turns all of it into one Next.js app zip.
 // Staging stays in the OS temp directory so nothing is written into this backend project.
@@ -12,7 +12,7 @@ import type { ProjectNames } from './scaffold'
 const ROOT = path.join(tmpdir(), 'jevelements-captures')
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 export const MAX_FILE_BYTES = 250 * 1024 * 1024
-export const FOLDERS = ['media', 'frames', 'code'] as const
+export const FOLDERS = ['media', 'frames', 'code', 'fonts'] as const
 export type Folder = (typeof FOLDERS)[number]
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

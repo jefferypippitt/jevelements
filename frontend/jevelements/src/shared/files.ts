@@ -17,6 +17,15 @@ const EXTENSIONS: Record<string, string> = {
   'video/webm': 'webm',
   'video/quicktime': 'mov',
   'video/ogg': 'ogv',
+  'font/woff2': 'woff2',
+  'font/woff': 'woff',
+  'font/ttf': 'ttf',
+  'font/otf': 'otf',
+  'application/font-woff2': 'woff2',
+  'application/font-woff': 'woff',
+  'application/x-font-woff': 'woff',
+  'application/x-font-ttf': 'ttf',
+  'application/x-font-otf': 'otf',
 }
 // Files a canvas or WebGL scene loads: 3D models, Lottie/Rive animations, HDR environments,
 // compressed textures, shaders. Servers often send these as octet-stream, so the URL names the type.
@@ -25,7 +34,7 @@ const SCENE_EXTENSIONS: Record<string, string> = {
   'model/gltf+json': 'gltf',
   'application/json': 'json',
 }
-const KNOWN_EXT = /\.(png|jpe?g|webp|avif|gif|svg|ico|mp4|webm|mov|m4v|ogv|json|lottie|riv|glb|gltf|bin|drc|splinecode|hdr|exr|ktx2|basis|usdz|fbx|obj|glsl|frag|vert|wgsl)$/i
+const KNOWN_EXT = /\.(png|jpe?g|webp|avif|gif|svg|ico|mp4|webm|mov|m4v|ogv|json|lottie|riv|glb|gltf|bin|drc|splinecode|hdr|exr|ktx2|basis|usdz|fbx|obj|glsl|frag|vert|wgsl|woff2?|ttf|otf)$/i
 
 // The content type decides the extension: image CDNs and next/image serve WebP or AVIF from URLs
 // that end in .png, or have no extension at all. Scene files go by the URL first: a .gltf is JSON.

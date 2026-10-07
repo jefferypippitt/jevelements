@@ -1,0 +1,44 @@
+<!doctype html>
+<html class="light" lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Theme test</title>
+    <!-- Dark mode detection (src/content/theme.ts, scheme.ts): pnpm test:build, node test/serve.mjs, then
+         open /test/theme.html and run JevTest.captureElement(document.getElementById('in-action')).
+         #in-action is built like console.typesafe.ai: <html class="light">, Tailwind v4 dark: compiled
+         to `:is(.dark *)` (flat and nested), so it must not react to the OS colour scheme. #follows-os
+         uses a prefers-color-scheme media query and must. -->
+    <script src="/dist/probe.js"></script>
+    <script src="/test/dist/pipeline.js"></script>
+    <style>
+      @font-face { font-family: '__Inter_d65c78'; font-style: normal; font-weight: 100 900; src: url(/test/fonts/inter-latin.woff2) format('woff2'); }
+      @font-face { font-family: '__Inter_Fallback_d65c78'; src: local("Arial"); ascent-override: 90.49%; descent-override: 22.56%; line-gap-override: 0.00%; size-adjust: 107.06%; }
+      .light { color-scheme: light; }
+      body { margin: 0; font-family: '__Inter_d65c78', '__Inter_Fallback_d65c78'; background: #fff; color: #111; }
+      section { padding: 24px; width: 560px; }
+      .opacity-50 { opacity: 0.5; }
+      /* Tailwind v4, flattened by Lightning CSS */
+      .dark\:invert:is(.dark *) { --tw-invert: invert(100%); filter: var(--tw-invert,); }
+      /* Tailwind v4, nested as emitted in development */
+      .dark\:bg-neutral-900 { &:where(.dark, .dark *) { background-color: #171717; } }
+      .group-hover\:opacity-100 { &:is(:where(.group):hover *) { @media (hover: hover) { opacity: 1; } } }
+      .aria-expanded\:rotate-180[aria-expanded="true"] { rotate: 180deg; }
+      .data-\[state\=open\]\:block[data-state="open"] { display: block; }
+      #follows-os p { color: #111; }
+      @media (prefers-color-scheme: dark) { #follows-os p { color: #eee; background: #222; } }
+    </style>
+  </head>
+  <body>
+    <section id="in-action" class="group">
+      <h2 class="dark:bg-neutral-900">TypeSafe in action</h2>
+      <div style="opacity: 0.8">
+        <img class="dark:invert opacity-50" src="/test/demo.svg" width="200" height="100" alt="Demo one" />
+        <img class="dark:invert" src="/test/demo.svg" width="200" height="100" alt="Demo two" />
+      </div>
+      <button class="aria-expanded:rotate-180" aria-expanded="false">Toggle</button>
+      <span class="group-hover:opacity-100 data-[state=open]:block" style="opacity: 0">Hidden hint</span>
+      <svg width="40" height="40" viewBox="0 0 40 40"><path d="M0 20 H40" stroke="#111" opacity="0.3" /></svg>
+    </section>
+    <section id="follows-os"><p>Follows the OS colour scheme</p></section>
+  </body>
+</html>

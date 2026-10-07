@@ -2,7 +2,7 @@
 // a section's controls (interactions.ts) and the state explorer that walks a component's nested states
 // (states.ts).
 import { label, stableClasses } from '../shared/dom'
-import { PROBE_BLOCKED_ATTR, PROBE_CLOCK_ATTR, PROBE_CLOCK_EVENT, PROBE_GUARD_ATTR, PROBE_GUARD_EVENT, PROBE_INTERACTIVE_ATTR, PROBE_WRITES_ATTR, PROBE_WRITES_BLOCKED_ATTR, PROBE_WRITES_EVENT } from '../shared/runtime'
+import { PROBE_BLOCKED_ATTR, PROBE_BLOCKED_TARGET_ATTR, PROBE_CLOCK_ATTR, PROBE_CLOCK_EVENT, PROBE_GUARD_ATTR, PROBE_GUARD_EVENT, PROBE_INTERACTIVE_ATTR, PROBE_WRITES_ATTR, PROBE_WRITES_BLOCKED_ATTR, PROBE_WRITES_EVENT } from '../shared/runtime'
 import type { Interaction, InteractionPhase } from '../shared/types'
 import { childrenOf, normalizeColors, tidyNumbers } from './extract'
 import type { ForcedHover } from './hover'
@@ -315,6 +315,24 @@ export async function settle(known?: Set<Animation>): Promise<Animation[]> {
   return started
 }
 
+// Where a click tried to go, once the probe's guard cancelled it: the URL, and whether it would have
+// opened in this tab or a new one. That's part of the behaviour to rebuild, not a reason to skip it.
+export interface Destination {
+  url: string
+  target: string // "_self", "_blank", or a named window
+}
+
+export function blockedDestination(): Destination | null {
+  const url = document.documentElement.getAttribute(PROBE_BLOCKED_ATTR)
+  if (url === null) return null
+  return { url, target: document.documentElement.getAttribute(PROBE_BLOCKED_TARGET_ATTR) ?? '_self' }
+}
+
+export function goesTo(d: Destination): string {
+  const where = d.target === '_self' ? 'in the same tab' : d.target === '_blank' ? 'in a new tab' : `in the window named "${d.target}"`
+  return `opens <${d.url}> ${where}`
+}
+
 export function escape() {
   for (const target of [document.activeElement ?? document.body, document]) {
     target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }))
@@ -396,6 +414,7 @@ export interface Played {
   // It tried to leave the page (cancelled by the guard, or undone with history.back): the reason for
   // the skipped list. The caller stops clicking.
   blocked?: string
+  destination?: Destination // where it tried to go: rebuilt as a link or a navigation
   navigated?: boolean // the URL changed before it could be stopped (it went back): the page may be mid-route
   when: string // "after click `button.tab`": what the media log calls this moment
   before: Snapshot
@@ -474,6 +493,7 @@ export async function play(c: PlayTarget, root: Element, scope: Element[], media
   // after its guards and resolvers) can start navigating a while after the click.
   const left = async (): Promise<Played | null> => {
     const blocked = document.documentElement.getAttribute(PROBE_BLOCKED_ATTR)
+    const destination = blockedDestination() ?? (location.href !== href ? { url: location.href, target: '_self' } : undefined)
     if (blocked === null && location.href === href) return null
     observer.disconnect()
     document.removeEventListener('scroll', scrolled, true)
@@ -485,7 +505,7 @@ export async function play(c: PlayTarget, root: Element, scope: Element[], media
     } else escape()
     const where = blocked ? `tried to open ${clip(blocked, 80)}; blocked` : 'navigated to another page; went back'
     const now = snapshot(scope)
-    return { item, changed: false, blocked: `\`${label(c.el)}\`${textOf(c.el) ? ` "${textOf(c.el)}"` : ''} (${where})`, navigated, when, before, final: now, added, removedFrom, touched, beforeSig }
+    return { item, changed: false, blocked: `\`${label(c.el)}\`${textOf(c.el) ? ` "${textOf(c.el)}"` : ''} (${where})`, destination, navigated, when, before, final: now, added, removedFrom, touched, beforeSig }
   }
   const early = await left()
   if (early) return early

@@ -154,7 +154,7 @@ async function download(src: string): Promise<{ blob: Blob; ext: string }> {
 }
 
 // Downloads one file and hands it straight to the backend: the page never holds the bytes.
-async function saveMedia({ src, captureId, name, upload }: SaveMediaMessage): Promise<SaveMediaResponse> {
+async function saveMedia({ src, captureId, name, upload, folder = 'media' }: SaveMediaMessage): Promise<SaveMediaResponse> {
   let file: { blob: Blob; ext: string }
   try {
     file = await download(src)
@@ -162,7 +162,7 @@ async function saveMedia({ src, captureId, name, upload }: SaveMediaMessage): Pr
     return { error: `download failed: ${errorText(err)}` }
   }
   const fileName = `${name}.${file.ext}`
-  return { file: fileName, upload: upload ? await put(captureId, 'media', fileName, file.blob) : undefined }
+  return { file: fileName, upload: upload ? await put(captureId, folder, fileName, file.blob) : undefined }
 }
 
 function uploadChunk({ captureId, folder, name, base64, offset }: UploadMessage): Promise<UploadResult> {

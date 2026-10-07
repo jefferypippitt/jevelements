@@ -1,11 +1,13 @@
 // Hooks installed at document_start, before the page's scripts run. They record what can't be read
 // back later: which scenes three.js renders (via the __THREE_DEVTOOLS__ hook three.js itself calls,
-// the same one the three.js devtools extension uses), and the GLSL sources and image textures handed
-// to WebGL. Each hook only stores references, so pages pay next to nothing for them.
+// the same one the three.js devtools extension uses), the GLSL sources and image textures handed to
+// WebGL, and the WGSL handed to WebGPU. Each hook only stores references, so pages pay next to
+// nothing for them.
 import { installPhysicsHooks } from './physics'
 import { installTransitionHooks } from './transitions'
 
 const MAX_PROGRAMS_PER_CANVAS = 30
+const MAX_WGSL_PER_DEVICE = 30
 const MAX_TEXTURES_PER_CANVAS = 40
 const MAX_SCENES_PER_RENDERER = 6
 
@@ -38,6 +40,8 @@ export interface HookState {
   textures: WeakMap<Canvas, Set<string>>
   contexts: WeakMap<Canvas, { type: string; attributes: WebGLContextAttributes | null }>
   uniforms: WeakMap<Canvas, Map<string, UniformRecord>>
+  devices: WeakMap<Canvas, object> // the GPUDevice a WebGPU canvas was configured with
+  wgsl: WeakMap<object, string[]> // GPUDevice → the WGSL of its shader modules, in creation order
   workers: string[] // script URLs of the Web Workers the page started
   offscreen: WeakSet<HTMLCanvasElement> // canvases handed to a worker with transferControlToOffscreen
 }
@@ -52,11 +56,14 @@ export function installHooks(late: boolean): HookState {
     textures: new WeakMap(),
     contexts: new WeakMap(),
     uniforms: new WeakMap(),
+    devices: new WeakMap(),
+    wgsl: new WeakMap(),
     workers: [],
     offscreen: new WeakSet(),
   }
   hookThree(state)
   hookWebGL(state)
+  hookWebGPU(state)
   hookWorkers(state)
   installPhysicsHooks()
   installTransitionHooks()
@@ -141,8 +148,8 @@ function hookWebGL(state: HookState) {
   const getContext = HTMLCanvasElement.prototype.getContext
   HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, options?: unknown) {
     const ctx = (getContext as (this: HTMLCanvasElement, type: string, options?: unknown) => RenderingContext | null).call(this, type, options)
-    if (ctx && /webgl/.test(type) && !state.contexts.has(this)) {
-      state.contexts.set(this, { type, attributes: (ctx as WebGLRenderingContext).getContextAttributes?.() ?? null })
+    if (ctx && /webgl|webgpu/.test(type) && !state.contexts.has(this)) {
+      state.contexts.set(this, { type, attributes: type === 'webgpu' ? null : ((ctx as WebGLRenderingContext).getContextAttributes?.() ?? null) })
     }
     return ctx
   } as typeof getContext
@@ -226,5 +233,37 @@ function hookWebGL(state: HookState) {
       }
       return texImage2D.apply(this, args)
     } as typeof proto.texImage2D
+  }
+}
+
+// WebGPU: configure() ties a canvas to a device, and the device compiles WGSL with
+// createShaderModule. Recording both gives each WebGPU canvas its shader source.
+interface GpuDeviceLike {
+  createShaderModule: (descriptor: { code: string }) => unknown
+}
+interface GpuCanvasContextLike {
+  canvas: Canvas
+  configure: (config: { device: object }) => void
+}
+
+function hookWebGPU(state: HookState) {
+  const w = window as unknown as { GPUDevice?: { prototype: GpuDeviceLike }; GPUCanvasContext?: { prototype: GpuCanvasContextLike } }
+  const device = w.GPUDevice?.prototype
+  if (device) {
+    const createShaderModule = device.createShaderModule
+    device.createShaderModule = function (this: object, descriptor: { code: string }) {
+      const list = state.wgsl.get(this) ?? []
+      if (typeof descriptor?.code === 'string' && list.length < MAX_WGSL_PER_DEVICE && !list.includes(descriptor.code)) list.push(descriptor.code)
+      state.wgsl.set(this, list)
+      return createShaderModule.call(this, descriptor)
+    }
+  }
+  const context = w.GPUCanvasContext?.prototype
+  if (context) {
+    const configure = context.configure
+    context.configure = function (this: GpuCanvasContextLike, config: { device: object }) {
+      if (config?.device) state.devices.set(this.canvas, config.device)
+      return configure.call(this, config)
+    }
   }
 }

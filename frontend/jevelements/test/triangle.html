@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Canvas link test</title>
+    <!-- The click sweep's cursor pass and navigations (src/content/sweep.ts): a canvas draws a small
+         triangle that sits between the click grid's points, turns the cursor into a pointer over it
+         (hit-tested in the render loop, like a three.js raycast), and opens a page in a new tab when
+         it is clicked. pnpm test:build, node test/serve.mjs, then open /test/triangle.html. -->
+    <script src="/dist/probe.js"></script>
+    <script src="/test/dist/pipeline.js"></script>
+    <style>
+      body { margin: 0; font-family: system-ui; background: #0b0b0f; color: #fff; }
+      #hero { position: relative; height: 480px; }
+      #stage { display: block; width: 800px; height: 480px; }
+    </style>
+  </head>
+  <body>
+    <section id="hero">
+      <canvas id="stage" width="800" height="480"></canvas>
+    </section>
+    <script>
+      const stage = document.getElementById('stage')
+      const g = stage.getContext('2d')
+      // Centred at 50% across, 32% down, about 12% wide: between the 4×3 grid's points.
+      const tri = [[400, 110], [350, 200], [450, 200]]
+      const inside = (x, y) => {
+        const [[ax, ay], [bx, by], [cx, cy]] = tri
+        const s = (px, py, qx, qy, rx, ry) => (px - rx) * (qy - ry) - (qx - rx) * (py - ry)
+        const d1 = s(x, y, ax, ay, bx, by), d2 = s(x, y, bx, by, cx, cy), d3 = s(x, y, cx, cy, ax, ay)
+        return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))
+      }
+      let pointer = null
+      stage.addEventListener('pointermove', (e) => (pointer = { x: e.offsetX, y: e.offsetY }))
+      stage.addEventListener('pointerleave', () => (pointer = null))
+      stage.addEventListener('click', (e) => {
+        if (inside(e.offsetX, e.offsetY)) window.open('/keynote', '_blank')
+      })
+      const draw = () => {
+        const over = !!pointer && inside(pointer.x, pointer.y)
+        stage.style.cursor = over ? 'pointer' : ''
+        g.fillStyle = '#111'
+        g.fillRect(0, 0, 800, 480)
+        g.fillStyle = over ? '#fff' : '#9ca3af'
+        g.beginPath()
+        g.moveTo(...tri[0]); g.lineTo(...tri[1]); g.lineTo(...tri[2]); g.closePath()
+        g.fill()
+        requestAnimationFrame(draw)
+      }
+      requestAnimationFrame(draw)
+    </script>
+  </body>
+</html>
