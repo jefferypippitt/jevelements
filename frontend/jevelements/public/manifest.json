@@ -3,8 +3,18 @@
   "name": "JevElements",
   "version": "0.2.0",
   "description": "Hover any section of a website and copy a prompt to rebuild it 1:1: styles, assets, SVGs, animations, WebGL and 3D.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "action": {
-    "default_title": "JevElements: pick a section (Alt+Shift+E)"
+    "default_title": "JevElements: pick a section (Alt+Shift+E)",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
   },
   "background": {
     "service_worker": "background.js",
