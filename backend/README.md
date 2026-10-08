@@ -16,6 +16,5 @@ Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` to turn on classificati
 - `GET /api/captures/:id/files/:folder/:name`: one saved file.
 - `PUT /api/captures/:id/project`: `{ name, component, file, prompt }` once the capture is classified, so the zip is named after the section (`hero-section`) and includes the prompt.
 - `GET /api/captures/:id/zip`: the capture as `<name>.zip`, a ready Next.js app (App Router, TypeScript, Tailwind CSS v4) in one `<name>/` folder: the scaffold, `PROMPT.md`, and the saved files in `public/capture/`, `public/reference/` and `public/reference/code/`. The extension downloads it when a capture finishes. Extract it, open the folder, run `npm install`.
-- `GET /api/health`: which keys are configured (development only).
 
 Saved files live in the OS temp directory (`jevelements-captures/`) and are deleted after 7 days. The zip is built in memory per request; nothing is written into this project.
