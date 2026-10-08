@@ -243,6 +243,18 @@ export class Inspector {
     ])
     this.shadow.append(el('style', { textContent: OVERLAY_CSS }), this.highlight, this.label)
     this.parts = new PartsLayer(this.shadow)
+    // The overlay hangs off <html>, outside the page's app, but a page that re-renders the whole
+    // document (a framework recovering from a hydration error, a script tidying <html>'s children)
+    // can still drop it while the capture clicks around. Put back, the drawer carries on as it was.
+    const reattach = new MutationObserver(() => {
+      if (!this.host.isConnected && (this.active || this.capturing || this.drawers.length)) {
+        console.warn('[jevelements] the page removed the overlay; putting it back')
+        document.documentElement.appendChild(this.host)
+      }
+      reattach.observe(document.documentElement, { childList: true }) // a new <html> if the page swapped it
+    })
+    reattach.observe(document, { childList: true })
+    reattach.observe(document.documentElement, { childList: true })
   }
 
   toggle() {
@@ -583,11 +595,7 @@ export class Inspector {
       {
         steps = [...steps, { label: 'Comparing light and dark mode', state: 'active' }]
         this.showStatus(steps)
-        const schemes = await compareSchemes(
-          target,
-          (hidden) => (this.host.style.display = hidden ? 'none' : ''),
-          (r) => this.shootRect(r),
-        )
+        const schemes = await compareSchemes(target, { take: (r) => this.shootUnder(r), right: () => this.drawerEdge() })
         capture.schemes = schemes
         mergeAssets(capture, schemes.media ?? [])
         schemes.media = undefined
@@ -608,6 +616,7 @@ export class Inspector {
       // The one screenshot is the initial look. Sections taller than the screen get it stitched top to
       // bottom instead, after the scroll story so one-time reveals were recorded first.
       if (rect.height > window.innerHeight * 1.05) {
+        // The drawer would be in every shot, so the overlay is hidden until the last one is taken.
         steps = [...steps, { label: 'Screenshotting the full section', state: 'active' }]
         this.showStatus(steps)
         this.host.style.display = 'none'

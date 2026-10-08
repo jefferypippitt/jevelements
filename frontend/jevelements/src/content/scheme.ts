@@ -7,7 +7,8 @@
 // and stands in, as an editable copy, for the original while the check runs.
 //
 // The scheme is emulated light, then dark, then light again. Each pass reads the colour properties of
-// every element and screenshots the visible part of the section; the second light pass is the
+// every element and screenshots the visible part of the section left of the drawer (which stays on
+// screen); the second light pass is the
 // baseline for what moves by itself (a marquee, a canvas), so only what dark mode alone changes is
 // reported. The real pointer can't be moved without the DevTools Protocol, so a hover stays the same
 // in all three passes and cancels out.
@@ -30,6 +31,11 @@ const MIN_CHANGED = 0.002 // share of pixels that must change before the shots c
 
 type Scheme = 'light' | 'dark'
 type Rect = { x: number; y: number; w: number; h: number }
+// A screenshot of a viewport rect, and where the drawer starts (shots stay left of it).
+export interface Shoot {
+  take: (rect: Rect) => Promise<string | undefined>
+  right: () => number
+}
 
 interface Pass {
   values: string[][] // per element: PROPS, then an <img>'s currentSrc
@@ -227,24 +233,24 @@ async function settle(root: Element) {
   if (images.length) await Promise.race([Promise.all(images.map(loaded)), wait(IMAGE_WAIT_MS)])
 }
 
-// The part of the section inside the viewport (the screenshot can only see that).
-function visibleRect(root: Element): Rect | null {
+// The part of the section inside the viewport and left of the drawer (the screenshot sees only that).
+function visibleRect(root: Element, right = window.innerWidth): Rect | null {
   const r = root.getBoundingClientRect()
   const x = Math.max(0, r.left)
   const y = Math.max(0, r.top)
-  const w = Math.min(window.innerWidth, r.right) - x
+  const w = Math.min(right, r.right) - x
   const h = Math.min(window.innerHeight, r.bottom) - y
   return w >= 1 && h >= 1 ? { x, y, w, h } : null
 }
 
-async function pass(emulation: Emulation, scheme: Scheme, root: Element, elements: Element[], shoot: (rect: Rect) => Promise<string | undefined>): Promise<Pass> {
+async function pass(emulation: Emulation, scheme: Scheme, root: Element, elements: Element[], shoot: Shoot): Promise<Pass> {
   const focused = document.activeElement
   if (focused && focused !== document.body && 'blur' in focused) (focused as HTMLElement).blur()
   emulation.apply(scheme)
   await settle(root)
   const values = elements.map(read)
-  const rect = visibleRect(root)
-  const shot = rect ? await shoot(rect) : undefined
+  const rect = visibleRect(root, shoot.right())
+  const shot = rect ? await shoot.take(rect) : undefined
   return { values, page: pageState(emulation.declaredScheme()), shot }
 }
 
@@ -282,11 +288,10 @@ function partialNote(emulation: Emulation): string | undefined {
   return notes.length ? notes.join('; ') : undefined
 }
 
-export async function compareSchemes(root: Element, hide: (hidden: boolean) => void, shoot: (rect: Rect) => Promise<string | undefined>): Promise<SchemeCheck> {
+export async function compareSchemes(root: Element, shoot: Shoot): Promise<SchemeCheck> {
   const [startX, startY] = [window.scrollX, window.scrollY]
   if (!visibleRect(root)) root.scrollIntoView({ block: 'nearest' })
   let emulation: Emulation | null = null
-  hide(true)
   try {
     emulation = await Emulation.start(root)
     const elements = [root, ...Array.from(root.querySelectorAll('*'))].filter((el) => el.getClientRects().length).slice(0, MAX_ELEMENTS)
@@ -318,7 +323,7 @@ export async function compareSchemes(root: Element, hide: (hidden: boolean) => v
     if (light.shot && dark.shot && again.shot) {
       const [schemeShare, baseShare] = await Promise.all([changed(light.shot, dark.shot), changed(light.shot, again.shot)])
       pixelsDiffer = schemeShare > MIN_CHANGED && schemeShare > baseShare * 3 + MIN_CHANGED
-      pixelsNote = `${percent(schemeShare)} of the section's visible pixels changed between the light and dark shots, and ${percent(baseShare)} between two light shots, which is what moves by itself`
+      pixelsNote = `${percent(schemeShare)} of the section's on-screen pixels changed between the light and dark shots, and ${percent(baseShare)} between two light shots, which is what moves by itself`
     }
     const differs = differences.length > 0 || pixelsDiffer
     return {
@@ -333,7 +338,6 @@ export async function compareSchemes(root: Element, hide: (hidden: boolean) => v
     return { differs: false, differences: [], error: err instanceof Error ? err.message : String(err) }
   } finally {
     emulation?.stop()
-    hide(false)
     window.scrollTo(startX, startY)
   }
 }
