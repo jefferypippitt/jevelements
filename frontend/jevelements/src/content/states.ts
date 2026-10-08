@@ -435,274 +435,279 @@ async function explore(component: Component, x: ExploreContext): Promise<Explore
   const changes = new MutationObserver(() => (scanned = null))
   changes.observe(x.section, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'disabled', 'open', ...STATE_ATTRS] })
   changes.observe(document.body, { childList: true })
+  try {
 
-  // Menus, popovers and dialogs a control opens are usually rendered on <body> (Radix, Headless UI,
-  // MUI portals), outside the component. Whatever opened there since exploring started is part of
-  // the state: in its look, its tree, and its controls (a menu's items). A portal container that was
-  // there all along but empty counts once it has content.
-  const atStart = new Map(Array.from(document.body.children).map((el) => [el, visible(el) ? el.childElementCount : -1]))
-  const portals = (): Element[] =>
-    Array.from(document.body.children).filter((el) => {
-      if (el.tagName === 'JEV-INSPECTOR' || el.tagName === 'SCRIPT' || containsDeep(el, x.section) || !visible(el)) return false
-      const before = atStart.get(el)
-      return before === undefined || before === -1 || (before === 0 && el.childElementCount > 0)
-    })
-  const parts = () => [rootNow(), ...portals()]
-  const controlsNow = (): Control[] => {
-    if (changes.takeRecords().length) scanned = null
-    return (scanned ??= [...controlsIn(rootNow()), ...portals().flatMap((portal) => controlsIn(portal).map((c) => ({ ...c, key: `portal|${c.key}` })))])
-  }
-
-  // Pressed on its own background first, like a visitor's first click into it: a mock window that
-  // turns "active" on the first press (its traffic-light dots light up) would otherwise never look
-  // like S0 again. No click event, so no control's handler runs.
-  rootNow().scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
-  pointer(rootNow(), [...ENTER, 'pointerdown', 'mousedown', 'pointerup', 'mouseup'])
-  await settle()
-  await quiet(x.section)
-  // What still changes by itself now, under the conditions of exploring (with a demo's tour held):
-  // changes there during a click aren't the click's doing. Without the hold, what the idle watch saw
-  // moving counts too (a timer slower than this short watch).
-  const restless = await restlessIn(x.section, RESTLESS_MS)
-  const noise = x.autoplay ? restless : new Set([...x.moved, ...restless])
-  const s0: State = { id: 'S0', look: await sample(parts()), path: [], controls: new Set() }
-  states.push(s0)
-  // The known state this look is: the same key, or the nearest one a residue or two away.
-  const known = (look: Look): State | null => {
-    const exact = states.find((s) => s.look.key === look.key)
-    if (exact) return exact
-    let best: State | null = null
-    let bestDistance = Infinity
-    for (const s of states) {
-      if (s.look.marks !== look.marks) continue // another selection: another state
-      const d = distance(s.look.lines, look.lines)
-      if (d < bestDistance) [best, bestDistance] = [s, d]
+    // Menus, popovers and dialogs a control opens are usually rendered on <body> (Radix, Headless UI,
+    // MUI portals), outside the component. Whatever opened there since exploring started is part of
+    // the state: in its look, its tree, and its controls (a menu's items). A portal container that was
+    // there all along but empty counts once it has content.
+    const atStart = new Map(Array.from(document.body.children).map((el) => [el, visible(el) ? el.childElementCount : -1]))
+    const portals = (): Element[] =>
+      Array.from(document.body.children).filter((el) => {
+        if (el.tagName === 'JEV-INSPECTOR' || el.tagName === 'SCRIPT' || containsDeep(el, x.section) || !visible(el)) return false
+        const before = atStart.get(el)
+        return before === undefined || before === -1 || (before === 0 && el.childElementCount > 0)
+      })
+    const parts = () => [rootNow(), ...portals()]
+    const controlsNow = (): Control[] => {
+      if (changes.takeRecords().length) scanned = null
+      return (scanned ??= [...controlsIn(rootNow()), ...portals().flatMap((portal) => controlsIn(portal).map((c) => ({ ...c, key: `portal|${c.key}` })))])
     }
-    return bestDistance <= Math.floor(look.lines.length * SAME_SHARE) ? best : null
-  }
-  // S0 is the main tree, unless the component isn't how the main tree caught it any more (a demo's
-  // autoplay moved on, the first press woke it up, the main tree ran out of nodes): then S0 gets its
-  // own tree, folded against the main tree's.
-  const main = x.layers.nodeOf(component.root)
-  if (main) remember(main, 'main', seen)
-  const base = x.layers.read(rootNow(), STATE_NODES)
-  if (base) {
-    const prints = new Map<CapturedNode, Print>()
-    if (!main || fingerprints(main, prints).fp !== fingerprints(base.tree, prints).fp) s0.tree = fold(base.tree, seen)
-    remember(base.tree, 'S0', seen)
-    for (const asset of base.assets) x.media.add(asset, 'when the component\'s states were explored')
-  }
 
-  // Every state's controls are queued for that state. Those it brought up (that agent's tabs) go
-  // first. Those that were on screen in the state before too (the sidebar rows) wait in `again`:
-  // usually they do the same thing from anywhere, but another agent's "Files" tab can hold other
-  // files. A control that has led to the same state from two different states is taken to do that
-  // from everywhere, and isn't clicked again.
-  // `kind`: tag and classes, without the parent: chat cards in different wrappers are one kind.
-  type Item = { from: State; control: string; name: string; kind: string; retried?: boolean }
-  const fresh: Item[] = []
-  const again: Item[] = []
-  const looks = new Map<string, number>()
-  const enqueue = (state: State, parent?: State) => {
-    for (const c of controlsNow()) {
-      state.controls.add(c.key)
-      const n = looks.get(`${state.id}|${c.look}`) ?? 0
-      looks.set(`${state.id}|${c.look}`, n + 1)
-      if (n >= MAX_SAME_LOOK) continue
-      ;(parent?.controls.has(c.key) ? again : fresh).push({ from: state, control: c.key, name: c.name, kind: `${c.el.tagName}.${stableClasses(c.el).join('.')}` })
-    }
-  }
-  enqueue(s0)
-  const settled = (control: string) => {
-    const led = edges.filter((e) => e.control === control)
-    return new Set(led.map((e) => e.from)).size >= 2 && new Set(led.map((e) => e.to)).size === 1
-  }
-  // A control of the state it's in comes first: a sidebar row lands in that agent, so its tabs are
-  // explored right there, before the explorer travels back for the next row. Depth before breadth,
-  // and no moves while there's something to click where it is.
-  const take = (list: Item[]): Item | undefined => {
-    const i = list.findIndex((item) => item.from === current)
-    return list.splice(i >= 0 ? i : 0, 1)[0]
-  }
-  // Controls that look alike usually act alike: once two of a look have changed nothing (chat cards
-  // with nothing behind them), the rest of that look are left alone.
-  const outcomes = new Map<string, { still: number; moved: number }>()
-  const idle = (kind: string) => {
-    const o = outcomes.get(kind)
-    return !!o && o.still >= 2 && !o.moved
-  }
-  const nextItem = (): Item | undefined => {
-    while (fresh.length) {
-      const item = take(fresh)!
-      if (!idle(item.kind)) return item
-    }
-    while (again.length) {
-      const item = take(again)!
-      if (!settled(item.control) && !idle(item.kind)) return item
-    }
-  }
-
-  const find = (key: string) => controlsNow().find((c) => c.key === key)
-  const here = async () => known(await sample(parts()))
-
-  // Breadth-first over known transitions (same-state ones don't move anywhere).
-  const route = (from: State, to: State): Edge[] | null => {
-    const back = new Map<State, Edge>()
-    const todo = [from]
-    while (todo.length) {
-      const s = todo.shift()!
-      if (s === to) {
-        const steps: Edge[] = []
-        for (let at = to; at !== from; at = back.get(at)!.from) steps.unshift(back.get(at)!)
-        return steps
-      }
-      for (const e of edges) if (e.from === s && e.to !== s && e.to !== from && !back.has(e.to)) {
-        back.set(e.to, e)
-        todo.push(e.to)
-      }
-    }
-    return null
-  }
-
-  // Clicks without measuring: a step on the way to another state.
-  const press = async (key: string): Promise<boolean> => {
-    const c = find(key)
-    if (!c) return false
-    c.el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
-    x.onFocus?.({ el: c.el, action: 'move', area: rootNow() })
-    guard(true)
-    scanned = null
-    pointer(c.el, [...ENTER, ...PRESS])
+    // Pressed on its own background first, like a visitor's first click into it: a mock window that
+    // turns "active" on the first press (its traffic-light dots light up) would otherwise never look
+    // like S0 again. No click event, so no control's handler runs.
+    rootNow().scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
+    pointer(rootNow(), [...ENTER, 'pointerdown', 'mousedown', 'pointerup', 'mouseup'])
     await settle()
-    pointer(c.el, LEAVE)
-    await quiet(rootNow(), PHASE_WINDOW_MS) // the component only: another part of the page may never sit still
-    return !document.documentElement.hasAttribute(PROBE_BLOCKED_ATTR)
-  }
+    await quiet(x.section)
+    // What still changes by itself now, under the conditions of exploring (with a demo's tour held):
+    // changes there during a click aren't the click's doing. Without the hold, what the idle watch saw
+    // moving counts too (a timer slower than this short watch).
+    const restless = await restlessIn(x.section, RESTLESS_MS)
+    const noise = x.autoplay ? restless : new Set([...x.moved, ...restless])
+    const s0: State = { id: 'S0', look: await sample(parts()), path: [], controls: new Set() }
+    states.push(s0)
+    // The known state this look is: the same key, or the nearest one a residue or two away.
+    const known = (look: Look): State | null => {
+      const exact = states.find((s) => s.look.key === look.key)
+      if (exact) return exact
+      let best: State | null = null
+      let bestDistance = Infinity
+      for (const s of states) {
+        if (s.look.marks !== look.marks) continue // another selection: another state
+        const d = distance(s.look.lines, look.lines)
+        if (d < bestDistance) [best, bestDistance] = [s, d]
+      }
+      return bestDistance <= Math.floor(look.lines.length * SAME_SHARE) ? best : null
+    }
+    // S0 is the main tree, unless the component isn't how the main tree caught it any more (a demo's
+    // autoplay moved on, the first press woke it up, the main tree ran out of nodes): then S0 gets its
+    // own tree, folded against the main tree's.
+    const main = x.layers.nodeOf(component.root)
+    if (main) remember(main, 'main', seen)
+    const base = x.layers.read(rootNow(), STATE_NODES)
+    if (base) {
+      const prints = new Map<CapturedNode, Print>()
+      if (!main || fingerprints(main, prints).fp !== fingerprints(base.tree, prints).fp) s0.tree = fold(base.tree, seen)
+      remember(base.tree, 'S0', seen)
+      for (const asset of base.assets) x.media.add(asset, 'when the component\'s states were explored')
+    }
 
-  // Known transitions from here. Without a route (or from a state never seen), a control on screen
-  // that has led somewhere the target can be reached from: a sidebar row back to a known agent, then
-  // its route. A different one each try.
-  const moveTo = async (target: State): Promise<State | null> => {
-    for (let attempt = 0; attempt < MOVE_TRIES; attempt++) {
-      const now = await here()
-      if (now === target) return now
-      const steps = now && route(now, target)
-      if (steps) {
-        for (const step of steps) if (!(await press(step.control))) break
+    // Every state's controls are queued for that state. Those it brought up (that agent's tabs) go
+    // first. Those that were on screen in the state before too (the sidebar rows) wait in `again`:
+    // usually they do the same thing from anywhere, but another agent's "Files" tab can hold other
+    // files. A control that has led to the same state from two different states is taken to do that
+    // from everywhere, and isn't clicked again.
+    // `kind`: tag and classes, without the parent: chat cards in different wrappers are one kind.
+    type Item = { from: State; control: string; name: string; kind: string; retried?: boolean }
+    const fresh: Item[] = []
+    const again: Item[] = []
+    const looks = new Map<string, number>()
+    const enqueue = (state: State, parent?: State) => {
+      for (const c of controlsNow()) {
+        state.controls.add(c.key)
+        const n = looks.get(`${state.id}|${c.look}`) ?? 0
+        looks.set(`${state.id}|${c.look}`, n + 1)
+        if (n >= MAX_SAME_LOOK) continue
+        ;(parent?.controls.has(c.key) ? again : fresh).push({ from: state, control: c.key, name: c.name, kind: `${c.el.tagName}.${stableClasses(c.el).join('.')}` })
+      }
+    }
+    enqueue(s0)
+    const settled = (control: string) => {
+      const led = edges.filter((e) => e.control === control)
+      return new Set(led.map((e) => e.from)).size >= 2 && new Set(led.map((e) => e.to)).size === 1
+    }
+    // A control of the state it's in comes first: a sidebar row lands in that agent, so its tabs are
+    // explored right there, before the explorer travels back for the next row. Depth before breadth,
+    // and no moves while there's something to click where it is.
+    const take = (list: Item[]): Item | undefined => {
+      const i = list.findIndex((item) => item.from === current)
+      return list.splice(i >= 0 ? i : 0, 1)[0]
+    }
+    // Controls that look alike usually act alike: once two of a look have changed nothing (chat cards
+    // with nothing behind them), the rest of that look are left alone.
+    const outcomes = new Map<string, { still: number; moved: number }>()
+    const idle = (kind: string) => {
+      const o = outcomes.get(kind)
+      return !!o && o.still >= 2 && !o.moved
+    }
+    const nextItem = (): Item | undefined => {
+      while (fresh.length) {
+        const item = take(fresh)!
+        if (!idle(item.kind)) return item
+      }
+      while (again.length) {
+        const item = take(again)!
+        if (!settled(item.control) && !idle(item.kind)) return item
+      }
+    }
+
+    const find = (key: string) => controlsNow().find((c) => c.key === key)
+    const here = async () => known(await sample(parts()))
+
+    // Breadth-first over known transitions (same-state ones don't move anywhere).
+    const route = (from: State, to: State): Edge[] | null => {
+      const back = new Map<State, Edge>()
+      const todo = [from]
+      while (todo.length) {
+        const s = todo.shift()!
+        if (s === to) {
+          const steps: Edge[] = []
+          for (let at = to; at !== from; at = back.get(at)!.from) steps.unshift(back.get(at)!)
+          return steps
+        }
+        for (const e of edges) if (e.from === s && e.to !== s && e.to !== from && !back.has(e.to)) {
+          back.set(e.to, e)
+          todo.push(e.to)
+        }
+      }
+      return null
+    }
+
+    // Clicks without measuring: a step on the way to another state.
+    const press = async (key: string): Promise<boolean> => {
+      const c = find(key)
+      if (!c) return false
+      c.el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
+      x.onFocus?.({ el: c.el, action: 'move', area: rootNow() })
+      guard(true)
+      scanned = null
+      pointer(c.el, [...ENTER, ...PRESS])
+      await settle()
+      pointer(c.el, LEAVE)
+      await quiet(rootNow(), PHASE_WINDOW_MS) // the component only: another part of the page may never sit still
+      return !document.documentElement.hasAttribute(PROBE_BLOCKED_ATTR)
+    }
+
+    // Known transitions from here. Without a route (or from a state never seen), a control on screen
+    // that has led somewhere the target can be reached from: a sidebar row back to a known agent, then
+    // its route. A different one each try.
+    const moveTo = async (target: State): Promise<State | null> => {
+      for (let attempt = 0; attempt < MOVE_TRIES; attempt++) {
+        const now = await here()
+        if (now === target) return now
+        const steps = now && route(now, target)
+        if (steps) {
+          for (const step of steps) if (!(await press(step.control))) break
+          continue
+        }
+        const onScreen = new Set(controlsNow().map((c) => c.key))
+        const ways = edges
+          .filter((e) => onScreen.has(e.control) && (e.to === target || route(e.to, target)))
+          .sort((a, b) => Number(b.to === target) - Number(a.to === target))
+        if (!ways.length) {
+          escape()
+          await settle()
+          continue
+        }
+        await press(ways[attempt % ways.length].control)
+      }
+      return here()
+    }
+
+    let current: State | null = s0
+    for (let next = nextItem(); next && clicks < MAX_CLICKS && performance.now() < x.deadline; next = nextItem()) {
+      if (leaves.has(next.control)) continue
+      if (current !== next.from) current = await moveTo(next.from)
+      // Couldn't get back there. A control that is on screen here too is played from here instead;
+      // otherwise it waits for one more try, when more ways around are known.
+      if (!current || !find(next.control)) {
+        if (!next.retried) again.push({ ...next, retried: true })
+        else unexplored.push(`${next.name} (in ${next.from.id}; could not get back there)`)
         continue
       }
-      const onScreen = new Set(controlsNow().map((c) => c.key))
-      const ways = edges
-        .filter((e) => onScreen.has(e.control) && (e.to === target || route(e.to, target)))
-        .sort((a, b) => Number(b.to === target) - Number(a.to === target))
-      if (!ways.length) {
-        escape()
-        await settle()
+      const from: State = current
+      if (edges.some((e) => e.from === from && e.control === next.control)) continue // already played from here
+      const control = find(next.control)!
+      const scope = [rootNow(), ...allIn(rootNow(), MAX_ELEMENTS)]
+      scanned = null
+      x.onFocus?.({ el: control.el, action: 'click', area: rootNow() })
+      const played = await play({ el: control.el, kind: 'click', signal: component.signal, similar: 0 }, x.section, scope, x.media)
+      clicks++
+      pointer(control.el, LEAVE)
+      if (played.blocked && played.navigated) {
+        blocked = played.blocked
+        break
+      }
+      if (played.blocked) {
+        leaves.add(next.control)
+        skipped.push(played.blocked)
+        await quiet(rootNow())
+        current = await here()
         continue
       }
-      await press(ways[attempt % ways.length].control)
-    }
-    return here()
-  }
-
-  let current: State | null = s0
-  for (let next = nextItem(); next && clicks < MAX_CLICKS && performance.now() < x.deadline; next = nextItem()) {
-    if (leaves.has(next.control)) continue
-    if (current !== next.from) current = await moveTo(next.from)
-    // Couldn't get back there. A control that is on screen here too is played from here instead;
-    // otherwise it waits for one more try, when more ways around are known.
-    if (!current || !find(next.control)) {
-      if (!next.retried) again.push({ ...next, retried: true })
-      else unexplored.push(`${next.name} (in ${next.from.id}; could not get back there)`)
-      continue
-    }
-    const from: State = current
-    if (edges.some((e) => e.from === from && e.control === next.control)) continue // already played from here
-    const control = find(next.control)!
-    const scope = [rootNow(), ...allIn(rootNow(), MAX_ELEMENTS)]
-    scanned = null
-    x.onFocus?.({ el: control.el, action: 'click', area: rootNow() })
-    const played = await play({ el: control.el, kind: 'click', signal: component.signal, similar: 0 }, x.section, scope, x.media)
-    clicks++
-    pointer(control.el, LEAVE)
-    if (played.blocked && played.navigated) {
-      blocked = played.blocked
-      break
-    }
-    if (played.blocked) {
-      leaves.add(next.control)
-      skipped.push(played.blocked)
       await quiet(rootNow())
-      current = await here()
-      continue
-    }
-    await quiet(rootNow())
-    // It changed content just outside the component (a file list's preview pane next to it): the
-    // component is bigger than it looked. Start over with the part that holds both.
-    const outside = clickChanges(x.section, control.el, [...played.touched, ...played.added], noise).filter((el) => !containsDeep(rootNow(), el) && !containsDeep(el, rootNow()))
-    if (outside.length) {
-      await moveTo(s0)
-      const result: ComponentStates = { target: name, signal: component.signal, states: [], transitions: [], unexplored: [], restored: false }
-      changes.disconnect()
-      return { result, items: [], clicks, skipped, grow: commonAncestor(x.section, rootNow(), outside) }
-    }
-    const look = await sample(parts())
-    let to = known(look)
-    if (!to && states.length >= MAX_STATES) {
-      unexplored.push(`${next.name} (in ${from.id}; state limit reached)`)
-      current = null
-      continue
-    }
-    if (!to) {
-      to = { id: `S${states.length}`, look, path: [...from.path, next.name], controls: new Set() }
-      const read = x.layers.read(rootNow(), STATE_NODES)
-      if (read) {
-        to.tree = fold(read.tree, seen)
-        remember(read.tree, to.id, seen)
-        const referenced = JSON.stringify(to.tree)
-        // Icons in folded parts aren't referenced from this state, so they aren't listed again.
-        for (const asset of read.assets) if (asset.kind !== 'svg' || referenced.includes(`inline ${asset.target}"`) || referenced.includes(`inline ${asset.target} `)) x.media.add(asset, played.when)
+      // It changed content just outside the component (a file list's preview pane next to it): the
+      // component is bigger than it looked. Start over with the part that holds both.
+      const outside = clickChanges(x.section, control.el, [...played.touched, ...played.added], noise).filter((el) => !containsDeep(rootNow(), el) && !containsDeep(el, rootNow()))
+      if (outside.length) {
+        await moveTo(s0)
+        const result: ComponentStates = { target: name, signal: component.signal, states: [], transitions: [], unexplored: [], restored: false }
+        changes.disconnect()
+        return { result, items: [], clicks, skipped, grow: commonAncestor(x.section, rootNow(), outside) }
       }
-      for (const portal of portals()) {
-        const opened = x.layers.read(portal, PORTAL_NODES)
-        if (!opened) continue
-        to.portals = [...(to.portals ?? []), { target: label(portal), tree: fold(opened.tree, seen) }]
-        remember(opened.tree, to.id, seen)
-        for (const asset of opened.assets) x.media.add(asset, played.when)
+      const look = await sample(parts())
+      let to = known(look)
+      if (!to && states.length >= MAX_STATES) {
+        unexplored.push(`${next.name} (in ${from.id}; state limit reached)`)
+        current = null
+        continue
       }
-      states.push(to)
-      x.onState?.(states.length)
-      enqueue(to, from)
+      if (!to) {
+        to = { id: `S${states.length}`, look, path: [...from.path, next.name], controls: new Set() }
+        const read = x.layers.read(rootNow(), STATE_NODES)
+        if (read) {
+          to.tree = fold(read.tree, seen)
+          remember(read.tree, to.id, seen)
+          const referenced = JSON.stringify(to.tree)
+          // Icons in folded parts aren't referenced from this state, so they aren't listed again.
+          for (const asset of read.assets) if (asset.kind !== 'svg' || referenced.includes(`inline ${asset.target}"`) || referenced.includes(`inline ${asset.target} `)) x.media.add(asset, played.when)
+        }
+        for (const portal of portals()) {
+          const opened = x.layers.read(portal, PORTAL_NODES)
+          if (!opened) continue
+          to.portals = [...(to.portals ?? []), { target: label(portal), tree: fold(opened.tree, seen) }]
+          remember(opened.tree, to.id, seen)
+          for (const asset of opened.assets) x.media.add(asset, played.when)
+        }
+        states.push(to)
+        x.onState?.(states.length)
+        enqueue(to, from)
+      }
+      edges.push({ from, to, control: next.control, name: next.name })
+      const outcome = outcomes.get(next.kind) ?? { still: 0, moved: 0 }
+      outcome[to === from ? 'still' : 'moved']++
+      outcomes.set(next.kind, outcome)
+      current = to
+      if (to !== from && played.changed) items.push({ ...played.item, state: { component: name, from: from.id, to: to.id } })
     }
-    edges.push({ from, to, control: next.control, name: next.name })
-    const outcome = outcomes.get(next.kind) ?? { still: 0, moved: 0 }
-    outcome[to === from ? 'still' : 'moved']++
-    outcomes.set(next.kind, outcome)
-    current = to
-    if (to !== from && played.changed) items.push({ ...played.item, state: { component: name, from: from.id, to: to.id } })
-  }
-  for (const left of [...fresh, ...again.filter((item) => !settled(item.control))].filter((item) => !idle(item.kind))) unexplored.push(`${left.name} (in ${left.from.id}; ${blocked ? 'stopped after a click left the page' : `${clicks >= MAX_CLICKS ? 'click' : 'time'} limit reached`})`)
+    for (const left of [...fresh, ...again.filter((item) => !settled(item.control))].filter((item) => !idle(item.kind))) unexplored.push(`${left.name} (in ${left.from.id}; ${blocked ? 'stopped after a click left the page' : `${clicks >= MAX_CLICKS ? 'click' : 'time'} limit reached`})`)
 
-  const restored = !blocked && (await moveTo(s0)) === s0
-  // Each state's path: the shortest route from S0 now that every transition is known, not the order
-  // the explorer happened to find it in.
-  for (const state of states.slice(1)) {
-    const steps = route(s0, state)
-    if (steps) state.path = steps.map((step) => step.name)
+    const restored = !blocked && (await moveTo(s0)) === s0
+    // Each state's path: the shortest route from S0 now that every transition is known, not the order
+    // the explorer happened to find it in.
+    for (const state of states.slice(1)) {
+      const steps = route(s0, state)
+      if (steps) state.path = steps.map((step) => step.name)
+    }
+    const order = (state: State) => states.indexOf(state)
+    const transitions: StateTransition[] = edges
+      .filter((e) => e.from !== e.to)
+      .sort((a, b) => order(a.from) - order(b.from) || order(a.to) - order(b.to))
+      .map((e) => ({ from: e.from.id, to: e.to.id, control: e.name }))
+    const result: ComponentStates = {
+      target: name,
+      signal: component.signal,
+      states: states.map((s): ComponentState => ({ id: s.id, path: s.path, tree: s.tree, portals: s.portals })),
+      transitions,
+      unexplored: unexplored.slice(0, 20),
+      restored,
+    }
+    changes.disconnect()
+    return { result, items, clicks, blocked, skipped }
+  } finally {
+    // A step that throws must not leave the observer on the page.
+    changes.disconnect()
   }
-  const order = (state: State) => states.indexOf(state)
-  const transitions: StateTransition[] = edges
-    .filter((e) => e.from !== e.to)
-    .sort((a, b) => order(a.from) - order(b.from) || order(a.to) - order(b.to))
-    .map((e) => ({ from: e.from.id, to: e.to.id, control: e.name }))
-  const result: ComponentStates = {
-    target: name,
-    signal: component.signal,
-    states: states.map((s): ComponentState => ({ id: s.id, path: s.path, tree: s.tree, portals: s.portals })),
-    transitions,
-    unexplored: unexplored.slice(0, 20),
-    restored,
-  }
-  changes.disconnect()
-  return { result, items, clicks, blocked, skipped }
 }

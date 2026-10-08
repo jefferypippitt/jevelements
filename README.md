@@ -35,3 +35,7 @@ Click the toolbar icon (or press `Alt+Shift+E`), then click a section. When the 
 
 - [Extension](frontend/jevelements/README.md)
 - [Backend](backend/README.md)
+
+## Checks
+
+`pnpm verify` runs typecheck, lint and unit tests. Run it in each of `backend/` and `frontend/jevelements/`.

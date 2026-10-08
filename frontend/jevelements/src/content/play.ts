@@ -479,58 +479,64 @@ export async function play(c: PlayTarget, root: Element, scope: Element[], media
     if (el) touched.push(el)
   }
   document.addEventListener('scroll', scrolled, true)
-  const beforeSig = signature(root)
+  try {
+    const beforeSig = signature(root)
 
-  const href = location.href
-  const clickedAt = performance.now()
-  pointer(c.el, c.kind === 'hover' ? ENTER : [...ENTER, ...PRESS])
-  if (c.kind === 'hover') forced?.on(c.el)
-  const ranAnimations = await settle(known)
+    const href = location.href
+    const clickedAt = performance.now()
+    pointer(c.el, c.kind === 'hover' ? ENTER : [...ENTER, ...PRESS])
+    if (c.kind === 'hover') forced?.on(c.el)
+    const ranAnimations = await settle(known)
 
-  const item: Interaction = { kind: c.kind, target, text, similar: c.similar, signal: c.signal, changes: [], appeared: [], disappeared: [], animations: [], restored: true }
-  // It tried to leave the page. The guard cancelled it, or (a back/forward, or no Navigation API)
-  // the URL changed anyway: go back. Checked again after the click's sequence: a router (Angular's,
-  // after its guards and resolvers) can start navigating a while after the click.
-  const left = async (): Promise<Played | null> => {
-    const blocked = document.documentElement.getAttribute(PROBE_BLOCKED_ATTR)
-    const destination = blockedDestination() ?? (location.href !== href ? { url: location.href, target: '_self' } : undefined)
-    if (blocked === null && location.href === href) return null
+    const item: Interaction = { kind: c.kind, target, text, similar: c.similar, signal: c.signal, changes: [], appeared: [], disappeared: [], animations: [], restored: true }
+    // It tried to leave the page. The guard cancelled it, or (a back/forward, or no Navigation API)
+    // the URL changed anyway: go back. Checked again after the click's sequence: a router (Angular's,
+    // after its guards and resolvers) can start navigating a while after the click.
+    const left = async (): Promise<Played | null> => {
+      const blocked = document.documentElement.getAttribute(PROBE_BLOCKED_ATTR)
+      const destination = blockedDestination() ?? (location.href !== href ? { url: location.href, target: '_self' } : undefined)
+      if (blocked === null && location.href === href) return null
+      observer.disconnect()
+      document.removeEventListener('scroll', scrolled, true)
+      forced?.off()
+      const navigated = location.href !== href
+      if (navigated) {
+        history.back()
+        await wait(800)
+      } else escape()
+      const where = blocked ? `tried to open ${clip(blocked, 80)}; blocked` : 'navigated to another page; went back'
+      const now = snapshot(scope)
+      return { item, changed: false, blocked: `\`${label(c.el)}\`${textOf(c.el) ? ` "${textOf(c.el)}"` : ''} (${where})`, destination, navigated, when, before, final: now, added, removedFrom, touched, beforeSig }
+    }
+    const early = await left()
+    if (early) return early
+
+    const after = snapshot(scope)
+    const addedNow = added.length
+    // A click can start a sequence that runs on after the first change settled.
+    const followed = c.kind === 'click' ? await followPhases(root, scope, after, added, clickedAt) : { phases: [], last: after }
+    const late = await left()
+    if (late) return late
     observer.disconnect()
     document.removeEventListener('scroll', scrolled, true)
-    forced?.off()
-    const navigated = location.href !== href
-    if (navigated) {
-      history.back()
-      await wait(800)
-    } else escape()
-    const where = blocked ? `tried to open ${clip(blocked, 80)}; blocked` : 'navigated to another page; went back'
-    const now = snapshot(scope)
-    return { item, changed: false, blocked: `\`${label(c.el)}\`${textOf(c.el) ? ` "${textOf(c.el)}"` : ''} (${where})`, destination, navigated, when, before, final: now, added, removedFrom, touched, beforeSig }
+    // Files this interaction put on screen: swapped sources, new backgrounds, revealed panels.
+    scope.forEach((el, i) => {
+      if (!after.shown[i]) return
+      if (el instanceof HTMLImageElement || el instanceof HTMLVideoElement) media.image(el, el.currentSrc || el.getAttribute('src') || '', when)
+      media.background(el, after.styles[i][background], when)
+    })
+    const changes = diff(scope, before, after)
+    const appearedEls = outermost([...scope.filter((_, i) => !before.shown[i] && after.shown[i]), ...added.slice(0, addedNow).filter((el) => el.isConnected && visible(el))])
+    item.changes = cap(changes)
+    item.appeared = cap(appearedEls.map((el) => `${root.contains(el) ? '' : 'outside the section (portal): '}${outline(el)}`))
+    item.disappeared = cap([...outermost(scope.filter((_, i) => before.shown[i] && !after.shown[i])).map((el) => outline(el)), ...removed])
+    item.animations = cap(ranAnimations.map(describeAnimation).filter((a): a is string => !!a))
+    if (followed.phases.length) item.phases = followed.phases
+    const changed = !!(item.changes.length || item.appeared.length || item.disappeared.length || followed.phases.length)
+    return { item, changed, when, before, final: followed.last, added, removedFrom, touched, beforeSig }
+  } finally {
+    // A step that throws must not leave the observer and scroll listener on the page.
+    observer.disconnect()
+    document.removeEventListener('scroll', scrolled, true)
   }
-  const early = await left()
-  if (early) return early
-
-  const after = snapshot(scope)
-  const addedNow = added.length
-  // A click can start a sequence that runs on after the first change settled.
-  const followed = c.kind === 'click' ? await followPhases(root, scope, after, added, clickedAt) : { phases: [], last: after }
-  const late = await left()
-  if (late) return late
-  observer.disconnect()
-  document.removeEventListener('scroll', scrolled, true)
-  // Files this interaction put on screen: swapped sources, new backgrounds, revealed panels.
-  scope.forEach((el, i) => {
-    if (!after.shown[i]) return
-    if (el instanceof HTMLImageElement || el instanceof HTMLVideoElement) media.image(el, el.currentSrc || el.getAttribute('src') || '', when)
-    media.background(el, after.styles[i][background], when)
-  })
-  const changes = diff(scope, before, after)
-  const appearedEls = outermost([...scope.filter((_, i) => !before.shown[i] && after.shown[i]), ...added.slice(0, addedNow).filter((el) => el.isConnected && visible(el))])
-  item.changes = cap(changes)
-  item.appeared = cap(appearedEls.map((el) => `${root.contains(el) ? '' : 'outside the section (portal): '}${outline(el)}`))
-  item.disappeared = cap([...outermost(scope.filter((_, i) => before.shown[i] && !after.shown[i])).map((el) => outline(el)), ...removed])
-  item.animations = cap(ranAnimations.map(describeAnimation).filter((a): a is string => !!a))
-  if (followed.phases.length) item.phases = followed.phases
-  const changed = !!(item.changes.length || item.appeared.length || item.disappeared.length || followed.phases.length)
-  return { item, changed, when, before, final: followed.last, added, removedFrom, touched, beforeSig }
 }

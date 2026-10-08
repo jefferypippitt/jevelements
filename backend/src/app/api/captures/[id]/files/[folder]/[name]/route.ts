@@ -1,4 +1,4 @@
-import { authorized, corsHeaders } from '@/lib/http'
+import { allowedOrigin, authorized, corsHeaders } from '@/lib/http'
 import { filePath, MAX_FILE_BYTES, readCaptureFile, saveFile } from '@/lib/store'
 
 type Context = { params: Promise<{ id: string; folder: string; name: string }> }
@@ -34,6 +34,7 @@ export function OPTIONS(request: Request) {
 // The extension uploads one file per request, as the raw body; `?offset=N` appends a later chunk.
 export async function PUT(request: Request, { params }: Context) {
   const headers = corsHeaders(request, METHODS)
+  if (!allowedOrigin(request)) return Response.json({ error: 'Forbidden origin' }, { status: 403, headers })
   if (!authorized(request)) return Response.json({ error: 'Unauthorized' }, { status: 401, headers })
 
   const { id, folder, name } = await params
@@ -60,6 +61,12 @@ export async function GET(_request: Request, { params }: Context) {
   if (!body) return new Response('Not found', { status: 404 })
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
   return new Response(new Uint8Array(body), {
-    headers: { 'Content-Type': TYPES[ext] ?? 'application/octet-stream', 'Content-Length': String(body.length) },
+    headers: {
+      'Content-Type': TYPES[ext] ?? 'application/octet-stream',
+      'Content-Length': String(body.length),
+      'X-Content-Type-Options': 'nosniff',
+      // Files come from arbitrary sites; an SVG opened here must not run script on the backend's origin.
+      'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self'; media-src 'self'; sandbox",
+    },
   })
 }

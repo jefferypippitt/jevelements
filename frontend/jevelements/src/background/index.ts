@@ -82,7 +82,7 @@ chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendRe
   }
   switch (message.type) {
     case 'jev:screenshot':
-      return reply(captureCropped(sender.tab?.windowId, message).then((dataUrl) => ({ dataUrl })))
+      return reply(captureCropped(sender.tab, message).then((dataUrl) => ({ dataUrl })))
     case 'jev:analyze':
       return reply(analyze(message))
     case 'jev:save-media':
@@ -208,8 +208,17 @@ async function saveProject({ captureId, name, component, file, prompt }: Project
   return body
 }
 
-async function captureCropped(windowId: number | undefined, { rect, viewportWidth }: ScreenshotMessage): Promise<string> {
-  const full = await chrome.tabs.captureVisibleTab(windowId ?? chrome.windows.WINDOW_ID_CURRENT, { format: 'png' })
+// captureVisibleTab shoots whatever tab is in front, so a capture keeps going only while its own tab is.
+async function captureCropped(tab: chrome.tabs.Tab | undefined, { rect, viewportWidth }: ScreenshotMessage): Promise<string> {
+  if (tab?.id === undefined) throw new Error('screenshots are only taken for a page tab')
+  const tabId = tab.id
+  const inFront = async () => {
+    const now = await chrome.tabs.get(tabId)
+    return now.active && now.windowId === tab.windowId
+  }
+  if (!(await inFront())) throw new Error('the tab is in the background; switch back to it to continue')
+  const full = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' })
+  if (!(await inFront())) throw new Error('the tab was switched during the screenshot')
   const bitmap = await createImageBitmap(await (await fetch(full)).blob())
 
   // The screenshot is in device pixels; scale covers devicePixelRatio and browser zoom.

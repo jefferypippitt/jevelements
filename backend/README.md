@@ -9,6 +9,8 @@ pnpm dev   # http://localhost:3000, the extension's default backend URL
 
 Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` to turn on classification (`AI_GATEWAY_API_KEY` is the fallback). `JEV_API_TOKEN`, when set, is required as a Bearer token on uploads and analysis. `pnpm test` runs the classifier checks.
 
+`pnpm dev` listens on 127.0.0.1 only. API writes are accepted only from a `chrome-extension://` origin (or from clients that send no origin, such as curl), and only from one extension when `JEV_EXTENSION_ID` is set. JSON routes require `Content-Type: application/json`.
+
 ## Routes
 
 - `POST /api/analyze`: classifies a capture with Jev (section type, layout, theme, scope, repeated items, behaviours) for the prompt.

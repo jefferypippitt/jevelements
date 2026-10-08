@@ -1,0 +1,2 @@
+# node:test snapshots are compared byte for byte, so they must keep LF endings on every checkout.
+*.snapshot text eol=lf

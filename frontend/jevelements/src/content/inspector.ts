@@ -263,7 +263,7 @@ export class Inspector {
   }
 
   start() {
-    if (this.active) return
+    if (this.active || this.capturing) return
     this.active = true
     this.closePanel()
     if (!this.host.isConnected) document.documentElement.appendChild(this.host)
@@ -283,6 +283,11 @@ export class Inspector {
   stop() {
     if (!this.active) return
     this.active = false
+    // A capture still needs the text log (runCapture stops it); otherwise the picker was dismissed.
+    if (!this.capturing) {
+      this.textLog?.stop()
+      this.textLog = null
+    }
     window.removeEventListener('mousemove', this.onMove, true)
     window.removeEventListener('click', this.onClick, true)
     for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'contextmenu'])
@@ -339,6 +344,7 @@ export class Inspector {
   }
 
   private onMove = (e: MouseEvent) => {
+    if (!e.isTrusted) return
     let target = e.target as Element | null
     if (target === document.documentElement) target = document.body // empty page area: pick <body>, not <html>
     if (!target || this.isOwn(target) || target === this.current) return
@@ -370,13 +376,16 @@ export class Inspector {
     Object.assign(this.label.style, { display: 'block', left: `${Math.max(4, r.left)}px`, top: `${labelTop}px` })
   }
 
+  // The picker only reacts to the user: the capture dispatches synthetic pointer events of its own (play.ts, sweep.ts).
   private swallow = (e: Event) => {
+    if (!e.isTrusted) return
     if (this.isOwn(e.target)) return
     e.preventDefault()
     e.stopImmediatePropagation()
   }
 
   private onClick = (e: MouseEvent) => {
+    if (!e.isTrusted) return
     if (this.isOwn(e.target)) return
     e.preventDefault()
     e.stopImmediatePropagation()
@@ -415,6 +424,7 @@ export class Inspector {
   // The background worker marks the tab while a capture runs, so if the page goes away mid-capture
   // the next page can say why the drawer vanished (see interrupted()).
   private async capture(target: Element) {
+    if (this.capturing) return // one capture at a time: a second one would fight the first over the page
     this.capturing = true
     await this.markCapturing(true)
     try {
@@ -670,10 +680,20 @@ export class Inspector {
       console.error('[jevelements] capture failed', err)
       const message = err instanceof Error ? err.message : String(err)
       this.showStatus([...steps.filter((step) => step.state !== 'active'), { label: `Capture failed: ${message}`, state: 'error' }])
+    } finally {
+      // Success or failure, leave nothing of the capture on the page.
+      this.textLog?.stop()
+      this.textLog = null
+      endSweep()
+      endClickSweep(target)
     }
   }
 
   private async screenshot(target: Element): Promise<string | undefined> {
+    if (!(await this.whenVisible())) {
+      console.warn('[jevelements] screenshot skipped: the tab stayed in the background')
+      return undefined
+    }
     const r = target.getBoundingClientRect()
     this.host.style.display = 'none'
     await nextFrame()
@@ -725,6 +745,15 @@ export class Inspector {
 
   // One piece of the full-section screenshot (the caller hides the overlay for the whole run).
   private async shootRect(rect: { x: number; y: number; w: number; h: number }): Promise<string | undefined> {
+    const wasHidden = document.visibilityState !== 'visible'
+    if (!(await this.whenVisible())) {
+      console.warn('[jevelements] screenshot skipped: the tab stayed in the background')
+      return undefined
+    }
+    if (wasHidden) {
+      await nextFrame()
+      await nextFrame()
+    }
     try {
       const message: BackgroundMessage = { type: 'jev:screenshot', rect, viewportWidth: window.innerWidth }
       const res: ScreenshotResponse = await askExtension(message)
@@ -734,6 +763,23 @@ export class Inspector {
       console.warn('[jevelements] screenshot failed', err)
     }
     return undefined
+  }
+
+  // A hidden tab can't be screenshotted (the service worker refuses), so wait a while for the user to come back.
+  private async whenVisible(timeoutMs = 60_000): Promise<boolean> {
+    if (document.visibilityState === 'visible') return true
+    return new Promise((resolve) => {
+      const done = (visible: boolean) => {
+        clearTimeout(timer)
+        document.removeEventListener('visibilitychange', onChange)
+        resolve(visible)
+      }
+      const onChange = () => {
+        if (document.visibilityState === 'visible') done(true)
+      }
+      const timer = window.setTimeout(() => done(false), timeoutMs)
+      document.addEventListener('visibilitychange', onChange)
+    })
   }
 
   private async analyze(capture: Capture): Promise<AnalyzeResponse> {

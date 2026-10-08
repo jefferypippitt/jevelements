@@ -1,6 +1,6 @@
 import { analyzeCapture } from '@/lib/analyze'
 import { isCapture } from '@/lib/capture'
-import { authorized, corsHeaders } from '@/lib/http'
+import { allowedOrigin, authorized, corsHeaders, sentJson } from '@/lib/http'
 
 export function OPTIONS(request: Request) {
   return new Response(null, { status: 204, headers: corsHeaders(request) })
@@ -8,10 +8,12 @@ export function OPTIONS(request: Request) {
 
 export async function POST(request: Request) {
   const headers = corsHeaders(request)
+  if (!allowedOrigin(request)) return Response.json({ error: 'Forbidden origin' }, { status: 403, headers })
 
   if (!authorized(request)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401, headers })
   }
+  if (!sentJson(request)) return Response.json({ error: 'Content-Type must be application/json' }, { status: 415, headers })
 
   let body: unknown
   try {
