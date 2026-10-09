@@ -13,6 +13,7 @@ Copy `.env.example` to `.env` and set `TYPESAFE_API_KEY` to turn on classificati
 
 ## Routes
 
+- `GET /`: status page. Shows whether each key is set and a table of recent analyses: which provider answered (TypeSafe or the AI Gateway fallback), why TypeSafe was skipped, model, and duration. The log is kept in the OS temp directory (`jevelements-runs.json`, last 200 runs).
 - `POST /api/analyze`: classifies a capture with Jev (section type, layout, theme, scope, repeated items, behaviours) for the prompt.
 - `PUT /api/captures/:id/files/:folder/:name`: the extension uploads each file it downloaded from the page (`media`), the screenshot (`frames`), and the scripts holding canvas code (`code`). `?offset=N` appends a chunk.
 - `GET /api/captures/:id/files/:folder/:name`: one saved file.

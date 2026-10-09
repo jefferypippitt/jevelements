@@ -30,8 +30,11 @@ function elementName(capture: Capture): string | null {
 }
 
 export function kitBase(capture: Capture): string {
-  const type = capture.analysis?.sectionType.value
-  const base = (capture.analysis?.nameFromType && type ? kebab(type) : elementName(capture)) || ''
+  // `name` is the type, or its family (features, social-proof) when only that is sure. Older backends
+  // send only nameFromType with the type.
+  const analysis = capture.analysis
+  const named = analysis?.nameFromType ? (analysis.name ?? analysis.sectionType.value) : null
+  const base = (named ? kebab(named) : elementName(capture)) || ''
   return base ? (base.endsWith('section') ? base : `${base}-section`) : 'section'
 }
 

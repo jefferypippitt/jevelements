@@ -15,6 +15,7 @@ import { captureFullSection, initialShot, toPng, type Shot } from './frames'
 import { compareSchemes } from './scheme'
 import OVERLAY_CSS from './overlay.css?inline'
 import { captureParts, PartsLayer } from './parts'
+import { pagePlacement } from './placement'
 import { inspectRuntime } from './runtime'
 import { wantsScrollRecording } from './scroll'
 import { endClickSweep, endSweep, hasClickTargets, hasSweepTargets, sweepClicks, sweepHover } from './sweep'
@@ -478,6 +479,7 @@ export class Inspector {
     try {
       // The section's parts as the picker showed them, read before hovers and clicks change anything.
       const parts = captureParts(target)
+      const placement = pagePlacement(target)
       const [{ capture, recordScroll, recordInteractions }, runtime] = await Promise.all([
         captureElement(
           target,
@@ -492,6 +494,7 @@ export class Inspector {
       ])
       capture.screenshot = screenshot
       if (parts.length) capture.parts = parts
+      capture.placement = placement
       if (runtime) {
         capture.runtime = runtime
         capture.libraries = runtime.libraries

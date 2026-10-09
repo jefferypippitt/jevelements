@@ -6,6 +6,7 @@
 // fails, the same questions go through Vercel AI Gateway (AI_GATEWAY_API_KEY).
 import { experimental_evaluate as evaluate } from 'ai'
 import { APIUserAbortError, choice, noul, score, TypeSafeClient } from '@typesafe-ai/sdk'
+import { familyOf, rollUpFamily, SECTION_TYPE_CRITERIA, SECTION_TYPE_INSTRUCTIONS, topTypes, type FamilyReading } from './anatomy'
 import { captureState, type Capture, type CaptureState } from './capture'
 import {
   CHOICE_ACT,
@@ -18,29 +19,13 @@ import {
   choiceConfidence,
   type SiblingGroup,
 } from './judgment'
+import { recordRun, type Provider } from './runs'
 
 const GATEWAY_MODEL = 'typesafe-ai/jev'
 const TYPESAFE_TIMEOUT_MS = 15_000
 
-const SECTION_TYPE = {
-  instructions: 'What kind of website section is `captured`? Judge it from `outline` and `signals`.',
-  criteria: {
-    navbar: 'Top navigation bar with logo and links',
-    hero: 'Large introductory section with a headline and call to action',
-    features: 'Grid or list describing product features or benefits',
-    pricing: 'Pricing plans or tiers',
-    testimonials: 'Customer quotes or reviews',
-    faq: 'Frequently asked questions',
-    cta: 'Standalone call-to-action banner',
-    'logo-cloud': 'Row or grid of customer or partner logos',
-    stats: 'Key numbers or metrics',
-    'blog-list': 'List or grid of articles or posts',
-    'contact-form': 'Form for contacting or signing up',
-    footer: 'Page footer with links and legal info',
-    card: 'A single card or small component',
-    other: 'None of the above',
-  },
-} as const
+// Landing-page anatomy: the types, their families and their definitions live in anatomy.ts.
+const SECTION_TYPE = { instructions: SECTION_TYPE_INSTRUCTIONS, criteria: SECTION_TYPE_CRITERIA }
 
 const LAYOUT = {
   instructions: 'What is the main layout pattern of this section? Judge it from `outline`.',
@@ -196,9 +181,15 @@ export interface ChoiceReading {
   confidence: number | null
 }
 
+interface TypeReading extends ChoiceReading {
+  probabilities?: Record<string, number>
+}
+
 export interface SectionAnalysis {
   model: string
   sectionType: ChoiceReading
+  sectionFamily: FamilyReading // the type's family (hero, social-proof, features, …), type probabilities summed
+  alternatives: { type: string; probability: number }[] // likeliest types inside that family
   layout: ChoiceReading
   theme: ChoiceReading
   scope: ChoiceReading
@@ -206,14 +197,15 @@ export interface SectionAnalysis {
   repeatedGroup: { id: string; summary: string; confidence: number | null } | null
   complexity: number // 0–3
   features: Record<string, number> // boolean question id → P(true)
-  nameFromType: boolean
+  nameFromType: boolean // named from the classification (type or family) rather than the element
+  name: string | null // what the kit is named after: the type ("feature-rows") or, when only that is sure, the family ("features")
   componentName: string | null
   promptSection: string // markdown block the extension inserts into the prompt
 }
 
-interface Judgment {
+export interface Judgment {
   model: string
-  sectionType: ChoiceReading
+  sectionType: TypeReading
   layout: ChoiceReading
   theme: ChoiceReading
   scope: ChoiceReading
@@ -232,24 +224,82 @@ export async function analyzeCapture(
   const groups = findSiblingGroups(capture.root)
   const state = captureState(capture, groups.length ? groups.map((group) => `${group.id}: ${describeGroup(group)}`).join('\n') : 'none')
   const repeated = repeatedCriteria(groups)
+  const startedAt = Date.now()
+  const outcome = await withFallback({
+    primary: typeSafeKey ? () => analyzeWithTypeSafe(state, repeated, groups, typeSafeKey, abortSignal) : null,
+    fallback: gatewayKey ? () => analyzeWithGateway(state, repeated, groups, model, abortSignal) : null,
+    aborted: (err) => aborted(err, abortSignal),
+  })
+  if (outcome.aborted) throw outcome.error
 
-  if (typeSafeKey) {
+  await recordRun({
+    at: new Date(startedAt).toISOString(),
+    provider: outcome.provider,
+    ok: outcome.ok,
+    url: capture.url,
+    model: outcome.ok ? outcome.value.model : null,
+    sectionType: outcome.ok ? outcome.value.sectionType.value : null,
+    durationMs: Date.now() - startedAt,
+    fallbackReason: outcome.fallbackReason,
+    error: outcome.ok ? null : message(outcome.error),
+  })
+  if (!outcome.ok) throw outcome.error
+  return outcome.value
+}
+
+type Attempt<T> = (() => Promise<T>) | null
+
+export type FallbackOutcome<T> =
+  | { ok: true; aborted: false; provider: Provider; value: T; fallbackReason: string | null }
+  | { ok: false; aborted: boolean; provider: Provider; error: unknown; fallbackReason: string | null }
+
+// TypeSafe first. Any failure that isn't the caller cancelling (bad key, out of credits, rate limit,
+// timeout, a malformed answer) hands the same questions to the AI Gateway.
+export async function withFallback<T>({
+  primary,
+  fallback,
+  aborted,
+}: {
+  primary: Attempt<T>
+  fallback: Attempt<T>
+  aborted: (err: unknown) => boolean
+}): Promise<FallbackOutcome<T>> {
+  let fallbackReason: string | null = null
+  if (primary) {
     try {
-      return await analyzeWithTypeSafe(state, repeated, groups, typeSafeKey, abortSignal)
+      return { ok: true, aborted: false, provider: 'typesafe', value: await primary(), fallbackReason }
     } catch (err) {
-      if (aborted(err, abortSignal) || !gatewayKey) throw err
+      if (aborted(err)) return { ok: false, aborted: true, provider: 'typesafe', error: err, fallbackReason }
+      if (!fallback) return { ok: false, aborted: false, provider: 'typesafe', error: err, fallbackReason }
+      fallbackReason = message(err)
       console.warn('[analyze] TypeSafe request failed, falling back to AI Gateway', err)
     }
+  } else if (fallback) {
+    fallbackReason = 'TYPESAFE_API_KEY is not set'
   }
 
-  if (gatewayKey) return analyzeWithGateway(state, repeated, groups, model, abortSignal)
-  throw new Error('Set TYPESAFE_API_KEY in backend/.env (AI_GATEWAY_API_KEY is the fallback)')
+  if (!fallback) {
+    const error = new Error('Set TYPESAFE_API_KEY in backend/.env (AI_GATEWAY_API_KEY is the fallback)')
+    return { ok: false, aborted: false, provider: 'none', error, fallbackReason }
+  }
+  try {
+    return { ok: true, aborted: false, provider: 'gateway', value: await fallback(), fallbackReason }
+  } catch (err) {
+    const error = fallbackReason ? new Error(`AI Gateway failed: ${message(err)} (after TypeSafe failed: ${fallbackReason})`, { cause: err }) : err
+    return { ok: false, aborted: aborted(err), provider: 'gateway', error, fallbackReason }
+  }
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 function stateRecord(state: CaptureState): Record<string, string> {
   return {
     page: state.page,
     captured: state.captured,
+    placement: state.placement,
+    content: state.content,
     signals: state.signals,
     siblingGroups: state.siblingGroups,
     outline: state.outline,
@@ -287,7 +337,7 @@ async function analyzeWithTypeSafe(
   return finish(
     {
       model,
-      sectionType: { value: answers.sectionType.choice, confidence: answers.sectionType.confidence },
+      sectionType: { value: answers.sectionType.choice, confidence: answers.sectionType.confidence, probabilities: answers.sectionType.probabilities },
       layout: { value: answers.layout.choice, confidence: answers.layout.confidence },
       theme: { value: answers.theme.choice, confidence: answers.theme.confidence },
       scope: { value: answers.scope.choice, confidence: answers.scope.confidence },
@@ -318,9 +368,10 @@ async function analyzeWithGateway(
     questions: asked,
     abortSignal,
   })
-  const picked = (answer: GatewayChoice, optionCount: number): ChoiceReading => ({
+  const picked = (answer: GatewayChoice, optionCount: number): TypeReading => ({
     value: answer.choice,
     confidence: choiceConfidence(answer.probabilities, optionCount),
+    probabilities: answer.probabilities,
   })
   const features = Object.fromEntries((Object.keys(NOULS) as NoulId[]).map((id) => [id, answers[id].probability])) as Record<NoulId, number>
 
@@ -340,17 +391,31 @@ async function analyzeWithGateway(
   )
 }
 
-function finish(judgment: Judgment, groups: SiblingGroup[]): SectionAnalysis {
-  const severalRegions = judgment.scope.value !== 'single-section' && (judgment.scope.confidence ?? 0) >= CHOICE_ACT
-  const nameFromType = !severalRegions && judgment.sectionType.value !== 'other' && (judgment.sectionType.confidence ?? 0) >= NAME_CONFIDENCE
-  const repeated = resolveRepeated(judgment.repeatedGroup, groups)
+export function finish(judgment: Judgment, groups: SiblingGroup[]): SectionAnalysis {
+  const { probabilities, ...sectionType } = judgment.sectionType
+  const family = rollUpFamily(probabilities) ?? { value: familyOf(sectionType.value), confidence: sectionType.confidence, probability: 1 }
+  const name = sectionName(judgment, family)
   const analysis: Omit<SectionAnalysis, 'promptSection'> = {
     ...judgment,
-    repeatedGroup: repeated,
-    nameFromType,
-    componentName: nameFromType ? pascalComponent(judgment.sectionType.value) : null,
+    sectionType,
+    sectionFamily: family,
+    alternatives: topTypes(probabilities, family.value),
+    repeatedGroup: resolveRepeated(judgment.repeatedGroup, groups),
+    nameFromType: name !== null,
+    name,
+    componentName: name ? pascalComponent(name) : null,
   }
   return { ...analysis, promptSection: renderPromptSection(analysis) }
+}
+
+// The type when it is sure. Else its family, when the vote split inside one family (feature-grid vs
+// feature-rows is still a features section). Else nothing, and the element's own name is used.
+function sectionName(judgment: Judgment, family: FamilyReading): string | null {
+  if (judgment.scope.value !== 'single-section' && (judgment.scope.confidence ?? 0) >= CHOICE_ACT) return null
+  const type = judgment.sectionType
+  if (type.value !== 'other' && (type.confidence ?? 0) >= NAME_CONFIDENCE) return type.value
+  if (family.value !== 'other' && familyOf(type.value) === family.value && (family.confidence ?? 0) >= NAME_CONFIDENCE) return family.value
+  return null
 }
 
 function resolveRepeated(answer: ChoiceReading | null, groups: SiblingGroup[]): SectionAnalysis['repeatedGroup'] {
@@ -407,8 +472,14 @@ function renderPromptSection(analysis: Omit<SectionAnalysis, 'promptSection'>): 
 
 function typeLine(analysis: Omit<SectionAnalysis, 'promptSection'>): string {
   const note = confidenceNote(analysis.sectionType.confidence)
-  if (analysis.nameFromType && analysis.componentName) {
-    return `- Type: **${analysis.sectionType.value}**${note}. Name the component \`${analysis.componentName}\`.`
+  const family = analysis.sectionFamily
+  if (analysis.componentName && analysis.name === family.value && analysis.name !== analysis.sectionType.value) {
+    const closest = analysis.alternatives.map((alt) => `${alt.type} ${Math.round(alt.probability * 100)}%`).join(', ')
+    return `- Type: a **${family.value}** section${confidenceNote(family.confidence)}. Closest patterns: ${closest}. Follow the measured tree for which one it is. Name the component \`${analysis.componentName}\`.`
+  }
+  if (analysis.componentName) {
+    const inFamily = family.value !== analysis.sectionType.value && family.value !== 'other' ? ` (a ${family.value} section)` : ''
+    return `- Type: **${analysis.sectionType.value}**${inFamily}${note}. Name the component \`${analysis.componentName}\`.`
   }
   if (analysis.scope.value !== 'single-section' && (analysis.scope.confidence ?? 0) >= CHOICE_ACT) {
     return `- Type: **${analysis.sectionType.value}**${note}. This label describes the capture overall. Name each region from its own contents.`

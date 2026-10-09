@@ -17,7 +17,12 @@ export const LABELS = {
 // How long a button shows its confirmation ("Copied") before reverting.
 export const FLASH_MS = 1400
 
-// jev's classification, shown as tags. Empty when the backend wasn't reachable.
+// jev's classification, shown as tags: the family when it differs from the type (features · feature-rows),
+// the type, and the layout. Empty when the backend wasn't reachable.
 export function captureTags(capture: Capture): string[] {
-  return capture.analysis ? [capture.analysis.sectionType.value, capture.analysis.layout.value] : []
+  const analysis = capture.analysis
+  if (!analysis) return []
+  const family = analysis.sectionFamily?.value
+  const withFamily = family && family !== 'other' && family !== analysis.sectionType.value ? [family] : []
+  return [...withFamily, analysis.sectionType.value, analysis.layout.value]
 }

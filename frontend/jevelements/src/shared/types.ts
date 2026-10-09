@@ -498,6 +498,7 @@ export interface Capture {
   scrollStory?: ScrollStory // the scroll recording grouped into phases
   interactions?: InteractionReport // hovers and clicks played on the live page
   parts?: SectionPart[] // the section's building blocks, for the component split
+  placement?: Placement // where the section sits on the page, for the classifier
   hoverSweep?: HoverSweep[] // canvases and the section, where they follow the pointer, swept left to right and top to bottom
   clickSweep?: ClickSweep[] // canvases and the section's background, clicked point by point
   code?: CodeRef[] // the page's scripts that draw the section's canvases
@@ -507,6 +508,14 @@ export interface Capture {
   theme?: ThemeInfo // how dark mode is switched, and the theme at capture
   schemes?: SchemeCheck // the section under the light and the dark OS colour scheme
   analysis?: SectionAnalysis // added by the backend (typesafe-ai/jev) when enabled
+}
+
+// ---------- placement (src/content/placement.ts) ----------
+// Where the section sits on the page. The root's box is already in page coordinates.
+export interface Placement {
+  pageHeight: number
+  before: string[] // nearest full-width bands above, closest first: their first heading, or what they are
+  after: string[] // nearest full-width bands below, closest first
 }
 
 // The rebuild ships as one zip: a ready Next.js app in `<name>/` with the saved files in public/ and the
@@ -519,7 +528,9 @@ export interface CaptureProject {
 // Returned by the backend's POST /api/analyze (backend/src/lib/analyze.ts).
 export interface SectionAnalysis {
   model: string
-  sectionType: { value: string; confidence: number | null }
+  sectionType: { value: string; confidence: number | null } // a landing-page type: hero, feature-rows, pricing, …
+  sectionFamily?: { value: string; confidence: number | null; probability: number } // hero, social-proof, features, conversion, …
+  alternatives?: { type: string; probability: number }[] // likeliest types inside that family
   layout: { value: string; confidence: number | null }
   theme: { value: string; confidence: number | null }
   scope: { value: string; confidence: number | null }
@@ -528,6 +539,7 @@ export interface SectionAnalysis {
   complexity: number
   features: Record<string, number>
   nameFromType: boolean
+  name?: string | null // the type, or the family when only that is sure; older backends leave it out
   componentName: string | null
   promptSection: string
 }
