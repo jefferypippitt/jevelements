@@ -29,7 +29,10 @@ Load `frontend/jevelements/dist` at `chrome://extensions` → **Load unpacked**.
 
 ## Usage
 
-Click the toolbar icon (or press `Alt+Shift+E`), then click a section. When the capture finishes, `<section>.zip` downloads. Extract it, open the folder in your editor, and paste `PROMPT.md` into your coding agent.
+1. **Capture a section.** Click the toolbar icon (or press `Alt+Shift+E`), then click a section. When the capture finishes, `<section>.zip` downloads.
+2. **Extract it.** Go to your `Downloads` folder, right-click the zip and choose **Extract All**.
+3. **Install.** Open the extracted folder in your editor and run `pnpm i`.
+4. **Build it.** In your coding agent, tag `@PROMPT.md`, attach a screenshot of the section, and send it. Plan mode is preferred.
 
 ## More
 
