@@ -96,3 +96,18 @@ test('naming follows the analysis', () => {
   assert.ok(prompt.includes('components/hero-section.tsx'))
   assert.ok(prompt.includes('HeroSection'))
 })
+
+test('unpackaged prompt never points at public/ files', () => {
+  const prompt = buildPrompt(
+    minimalCapture({
+      assets: [{ kind: 'image', src: 'https://example.com/hero.png', target: 'img.hero', alt: 'Hero', width: 800, height: 400 }],
+      fonts: [{ family: 'Inter', weights: ['400'], styles: ['normal'], links: [], faces: ['@font-face { font-family: Inter; src: url(https://example.com/inter.woff2) }'], files: ['https://example.com/inter.woff2'] }],
+      saved: { files: {}, uploaded: [], failed: [{ src: 'https://example.com/gone.png', reason: 'HTTP 404' }] },
+    }),
+  )
+  for (const text of ['public/capture', 'public/fonts', '/capture/', 'Never hotlink', 'nothing hotlinked', 'not in the zip', "backend wasn't running"]) {
+    assert.ok(!prompt.includes(text), text)
+  }
+  assert.ok(prompt.includes('https://example.com/hero.png'))
+  assert.ok(prompt.includes('https://example.com/inter.woff2'))
+})
