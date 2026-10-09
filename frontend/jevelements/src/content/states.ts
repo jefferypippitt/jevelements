@@ -381,6 +381,7 @@ export interface ExploreContext {
   moved: Set<Element> // what changed by itself during the idle watch: not a click's doing
   onState?: (states: number) => void
   onFocus?: (focus: TraceFocus) => void // the control about to be pressed, for the on-page trace
+  signal?: AbortSignal // the capture was stopped: explore no further
 }
 
 export interface Explored {
@@ -406,7 +407,7 @@ export async function exploreComponent(component: Component, x: ExploreContext):
     for (let grown = 0; ; grown++) {
       const explored = await explore(component, x)
       clicks += explored.clicks
-      if (!explored.grow || explored.blocked || grown >= MAX_GROW) return { ...explored, clicks }
+      if (!explored.grow || explored.blocked || grown >= MAX_GROW || x.signal?.aborted) return { ...explored, clicks }
       component = { ...component, root: explored.grow }
     }
   } finally {
@@ -607,7 +608,7 @@ async function explore(component: Component, x: ExploreContext): Promise<Explore
     }
 
     let current: State | null = s0
-    for (let next = nextItem(); next && clicks < MAX_CLICKS && performance.now() < x.deadline; next = nextItem()) {
+    for (let next = nextItem(); next && clicks < MAX_CLICKS && performance.now() < x.deadline && !x.signal?.aborted; next = nextItem()) {
       if (leaves.has(next.control)) continue
       if (current !== next.from) current = await moveTo(next.from)
       // Couldn't get back there. A control that is on screen here too is played from here instead;

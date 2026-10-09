@@ -10,7 +10,7 @@ import type { Asset, AssetLook, Capture, CapturedNode, CodeRef, ComponentStates,
 // prompt is written for an agent working inside that extracted folder.
 
 
-function stackSection(kit: string, scope: SectionAnalysis['scope'] | undefined): string {
+function stackSection(kit: string, scope: SectionAnalysis['scope'] | undefined, packaged: boolean): string {
   const { file, component } = componentNames(kit)
   const severalRegions = !!scope && scope.value !== 'single-section' && (scope.confidence ?? 0) >= COLLAPSE_ACT
   const structure = severalRegions
@@ -23,7 +23,9 @@ Always **Next.js** (App Router) with **TypeScript** and **Tailwind CSS v4**, in 
 ${structure}
 - Keep components Server Components and add \`"use client"\` only to the ones that need state, effects or event handlers.
 - Style with Tailwind utility classes. When a value is not exactly on Tailwind's scale, use an arbitrary value (e.g. \`text-[56px]\`, \`leading-[64px]\`, \`bg-[#0b0b0f]\`, \`shadow-[0_1px_2px_#0000000d]\`). Never round to the nearest step. Put \`@keyframes\`, \`@font-face\` and anything Tailwind can't express in \`app/globals.css\`.
-- Every image, video and other asset lives in \`public/\` and is referenced by its local path (\`/capture/…\`). Never hotlink the original site.
+${packaged
+    ? '- Every image, video and other asset lives in `public/` and is referenced by its local path (`/capture/…`). Never hotlink the original site.'
+    : "- This capture has no saved copies of the page's files: use the images, video and fonts by the original URLs listed under **Images & video** and **Fonts** (hotlinking them is expected here). Don't swap in placeholder images, stock photos, solid colors or gradients."}
 - Install any npm package the spec calls for (\`gsap\`, \`three\`, \`vgpu\`, \`lenis\`, \`motion\`, \`lottie-web\`, …) with \`npm install\`.
 - Output only this section, with no page chrome, nav, or footer unless they are part of the captured element.
 - Keep the section's text content exactly as written below, including capitalization and punctuation.
@@ -262,7 +264,7 @@ The goal is a **pixel-accurate 1:1 clone**: the same structure, layout, dimensio
 
   sections.push(installSection(capture, kit, plan))
 
-  sections.push(stackSection(kit, capture.analysis?.scope))
+  sections.push(stackSection(kit, capture.analysis?.scope, !!capture.project))
 
   const parts = partsSection(capture, kit)
   if (parts) sections.push(parts)
@@ -398,7 +400,7 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
     caveats.push(`Hovers and clicks were played with synthetic events. During hovers the site's CSS :hover rules were applied too, so pure-CSS hovers on buttons, links and cards appear under **Interactions** as well as in the tree's state lines. Only tabs, disclosures (accordions, dropdowns), menus, the controls of mock UIs (product demos hidden from assistive tech) and hidden clicks (scripted elements with no markup, played with server writes blocked) were clicked: other buttons and links were hovered, never clicked, so what they do on click (open a page, a dialog) was not recorded. ${sweep}${capture.clickSweep?.length ? ' Clicks where nothing is a control were swept too; see **Click sweep**.' : ''} Drag-and-drop, swipe, long-press and keyboard-only interactions were not played.`)
   } else caveats.push('Hover-only and click-only motion was not played.')
   const saved = capture.saved
-  if (saved?.failed.length) caveats.push(`${saved.failed.length} file(s) could not be fetched while capturing, so they aren't in \`public/capture/\`. For each one, crop that area out of the screenshot and use it at the same size (not a gray box or stock image), and tell the user which file is missing: ${saved.failed.slice(0, 5).map((f) => `${f.src.startsWith('data:') ? 'inline data' : f.src.slice(0, 120)} (${f.reason})`).join('; ')}`)
+  if (saved?.failed.length) caveats.push(`${saved.failed.length} file(s) could not be fetched while capturing, so ${capture.project ? "they aren't in `public/capture/`" : 'their URLs may not load in the rebuild either'}. For each one, crop that area out of the screenshot and use it at the same size (not a gray box or stock image), and tell the user which file is missing: ${saved.failed.slice(0, 5).map((f) => `${f.src.startsWith('data:') ? 'inline data' : f.src.slice(0, 120)} (${f.reason})`).join('; ')}`)
   sections.push(`## Capture caveats\n${caveats.map((c) => `- ${c}`).join('\n')}`)
 
   sections.push(`## Acceptance checklist
@@ -410,7 +412,7 @@ ${capture.pageMedia.map((u) => `- ${ref(u)}`).join('\n')}`)
 - [ ] Pseudo-elements (::before / ::after) are recreated with their full styles.
 - [ ] Hover, focus, and active states behave as specified, including transitions and their durations.
 - [ ] CSS keyframes, script animations and JS-driven motion run with the same timing and easing, and respect prefers-reduced-motion.
-- [ ] Every image and video is the real file in \`public/capture/\` (nothing hotlinked, no placeholders or stock images), referenced by local path, at the listed sizes. SVGs and canvas/WebGL areas match the spec.
+- [ ] ${capture.project ? "Every image and video is the real file in `public/capture/` (nothing hotlinked, no placeholders or stock images), referenced by local path, at the listed sizes." : "Every image and video is the site's real file, loaded from the URL listed under **Images & video** (or, where one doesn't load, that area cropped from the screenshot), at the listed sizes; no placeholders or stock images."} SVGs and canvas/WebGL areas match the spec.
 - [ ] Hidden content (tabs, menus, panels) exists and can be revealed the same way.
 - [ ] Breakpoints listed above are implemented.
 - [ ] Semantic HTML and all alt / aria attributes are preserved.
@@ -524,7 +526,7 @@ struct Params { resolution: vec2f, time: f32, pointer: vec2f }
   return vec4f(st, 0.5 + 0.5 * sin(params.time), 1.0);
 }
 \`\`\`
-In the component, call \`createRenderer(canvas)\` in a \`useEffect\` and dispose it on unmount (the promise may still be pending: \`pending.then((r) => r?.dispose())\`). If \`init()\` rejects (no WebGPU), show the canvas snapshot from \`public/capture/\` at the same size instead; never leave the area empty. Under \`prefers-reduced-motion: reduce\`, hold time still.
+In the component, call \`createRenderer(canvas)\` in a \`useEffect\` and dispose it on unmount (the promise may still be pending: \`pending.then((r) => r?.dispose())\`). If \`init()\` rejects (no WebGPU), show the canvas snapshot ${capture.project ? 'from `public/capture/`' : '(see **Canvas, WebGL & embeds**) or that area cropped from the screenshot'} at the same size instead; never leave the area empty. Under \`prefers-reduced-motion: reduce\`, hold time still.
 
 **Porting GLSL to WGSL.** Translate syntax only: keep every constant, color, noise function, loop count and the order of operations exactly as captured.
 - vgpu's \`uv\` starts at the top-left and \`v\` grows downward. GLSL and Shadertoy code assume bottom-left: flip once (\`1.0 - uv.y\`) and keep the rest unchanged. \`gl_FragCoord.xy\` is \`st * params.resolution\`.
@@ -959,7 +961,7 @@ function fontsSection(capture: Capture, ref: (url: string) => string): string {
           `  - ${refused.length} of its file(s) couldn't be downloaded (${blocked.get(refused[0].url)}): the site blocks other websites from loading its fonts, so ${refused.length === 1 ? 'that URL' : 'those URLs'} won't load in the rebuild and the browser would silently use a fallback. Load **${real ?? f.family}** with \`next/font/google\` (if it's a Google font) or a local copy of the font instead, with the same weights${f.fallback ? ' and the fallback below' : ''}.`,
         )
       } else if (missing.length) {
-        out.push(`  - ${missing.length} of its file(s) aren't in this app (it was packaged without them), and sites usually block other websites from loading their fonts: if a URL above doesn't load, use \`next/font/google\` (if it's a Google font) or a local copy of **${real ?? f.family}**.`)
+        out.push(`  - ${missing.length} of its file(s) aren't in this app${capture.project ? ' (it was packaged without them)' : ''}, and sites usually block other websites from loading their fonts: if a URL above doesn't load, use \`next/font/google\` (if it's a Google font) or a local copy of **${real ?? f.family}**.`)
       }
     }
     if (f.fallback?.length) {
@@ -968,8 +970,11 @@ function fontsSection(capture: Capture, ref: (url: string) => string): string {
     if (!f.links.length && !f.faces.length) out.push('  - No @font-face rule or font stylesheet found: a system font, or loaded by a script (check "Files loaded by the page\'s scripts").')
     return out.join('\n')
   })
+  const fontIntro = capture.project
+    ? "Use the local font files listed here (in `public/fonts/`, referenced as `/fonts/…`), never the site's font URLs: sites usually serve fonts without CORS headers, so other websites can't load them and the browser silently falls back to another font."
+    : "This app has no local copies of the site's font files. For a Google font, use `next/font/google` with the name given here; otherwise load the files from the URLs below, and if they don't load (sites usually serve fonts without CORS headers), use the closest match and tell the user which font is missing."
   return `## Fonts
-Use the local font files listed here (in \`public/fonts/\`, referenced as \`/fonts/…\`), never the site's font URLs: sites usually serve fonts without CORS headers, so other websites can't load them and the browser silently falls back to another font. Keep each family name exactly as written, since the tree's **css** lines use it. The per-element typography (size, weight, line-height, letter-spacing, OpenType features, variable-font axes, text-wrap) is in the tree's **css** lines.
+${fontIntro} Keep each family name exactly as written, since the tree's **css** lines use it. The per-element typography (size, weight, line-height, letter-spacing, OpenType features, variable-font axes, text-wrap) is in the tree's **css** lines.
 ${lines.join('\n') || '- (no text found)'}`
 }
 
@@ -1163,6 +1168,7 @@ ${parts.join('\n\n')}`
 interface MediaPlan {
   names: Map<string, string> // source URL → file name in public/capture/
   archived: Set<string> // names in the zip
+  packaged: boolean // the app zip was made (capture.project is set)
 }
 
 function planMedia(media: Asset[], capture: Capture): MediaPlan {
@@ -1171,7 +1177,7 @@ function planMedia(media: Asset[], capture: Capture): MediaPlan {
   const names = new Map<string, string>()
   for (const a of media) if (a.file && archived.has(a.file)) names.set(a.src, a.file)
   for (const [src, name] of Object.entries(saved?.files ?? {})) if (archived.has(name)) names.set(src, name)
-  return { names, archived }
+  return { names, archived, packaged: !!capture.project }
 }
 
 // Step 1 of the rebuild. With the backend running, the extension downloaded <name>.zip: the whole
@@ -1183,7 +1189,7 @@ function installSection(capture: Capture, kit: string, plan: MediaPlan): string 
   if (!capture.project) {
     return [
       '## Step 1: set up the Next.js app',
-      `JevElements couldn't package this capture as an app zip (its backend wasn't running), so the page's files weren't saved: **Images & video** lists them with their original URLs. Create the app, then replace \`app/page.tsx\` so it renders \`${component}\` from \`components/${file}.tsx\`.`,
+      `JevElements didn't package this capture as an app zip (the backend isn't running, or it's a deployed backend that doesn't store files), so the page's files weren't saved: **Images & video** and **Fonts** list them by their original URLs. Create the app, then replace \`app/page.tsx\` so it renders \`${component}\` from \`components/${file}.tsx\`.`,
       `\`\`\`bash\nnpx create-next-app@latest ${dir} --yes --ts --tailwind --app --no-src-dir --use-npm\ncd ${dir}\n\`\`\``,
       'The screenshot is the visual source of truth. Do not render it in the section.',
     ].join('\n\n')
@@ -1220,10 +1226,13 @@ function mediaSection(media: Asset[], plan: MediaPlan): string {
     : ''
   const list = media
     .filter((a) => !a.sequence)
-    .map((a) => mediaLine(a, plan.names.get(a.src)))
+    .map((a) => mediaLine(a, plan.names.get(a.src), plan.packaged))
     .join('\n')
+  const intro = plan.packaged
+    ? `The files are in \`public/capture/\` (Step 1). The tree above already names each one on the element that shows it (\`src="/capture/…"\`, \`poster\`, \`url("/capture/…")\` in backgrounds), so use exactly that file there, in \`next/image\`, \`img\`, \`video\`, or the Lottie player. Images that only one theme shows (\`dark:hidden\` / \`hidden dark:block\`) are both listed: keep both, with the same classes.`
+    : `These files weren't saved with this capture. Use each one from its original URL below, exactly as listed, in \`img\`, \`video\` or the Lottie player (or \`next/image\` with the site's host added to \`images.remotePatterns\` in \`next.config.ts\`). If a URL doesn't load in the rebuild, crop that area out of the screenshot and use it at the same size, and tell the user which file is missing. Images that only one theme shows (\`dark:hidden\` / \`hidden dark:block\`) are both listed: keep both, with the same classes.`
   return `## Images & video${later}
-The files are in \`public/capture/\` (Step 1). The tree above already names each one on the element that shows it (\`src="/capture/…"\`, \`poster\`, \`url("/capture/…")\` in backgrounds), so use exactly that file there, in \`next/image\`, \`img\`, \`video\`, or the Lottie player. Images that only one theme shows (\`dark:hidden\` / \`hidden dark:block\`) are both listed: keep both, with the same classes.
+${intro}
 
 ${list}${sequenceBlocks(media.filter((a) => a.sequence), plan)}
 
@@ -1247,20 +1256,26 @@ function sequenceBlocks(frames: Asset[], plan: MediaPlan): string {
   }).join('')
 }
 
-function mediaLine(a: Asset, local: string | undefined): string {
+function mediaLine(a: Asset, local: string | undefined, packaged: boolean): string {
   const size = a.width ? ` displayed at ${a.width}×${a.height}px` : ''
   const natural = a.naturalWidth ? ` (intrinsic ${a.naturalWidth}×${a.naturalHeight})` : ''
   const source = a.src.startsWith('data:') ? 'inline data from the page' : a.src.startsWith('blob:') ? 'a blob: URL inside the page' : `<${a.src}>`
-  const missing = a.via
-    ? `${source}: a streamed or embedded video, not in the zip; use its poster or the screenshot at the same size`
-    : a.src.startsWith('blob:')
-      ? `${source}: not in the zip; use its poster at the same size`
-      : `${source}: not in the zip`
+  const missing = packaged
+    ? a.via
+      ? `${source}: a streamed or embedded video, not in the zip; use its poster or the screenshot at the same size`
+      : a.src.startsWith('blob:')
+        ? `${source}: not in the zip; use its poster at the same size`
+        : `${source}: not in the zip`
+    : a.via
+      ? `${source}: a streamed or embedded video; use its poster or the screenshot at the same size`
+      : a.src.startsWith('blob:')
+        ? `${source}: only exists inside the page; use its poster at the same size`
+        : source
   const file = local ? `\`public/capture/${local}\` (from ${source})` : missing
   const when = a.when ? `, **shown ${a.when}**` : ''
   let line = `- ${a.kind} on \`${a.target}\`: ${file}${size}${natural}${a.alt ? `, alt ${inlineCode(a.alt)}` : ''}${when}`
   if (a.look) line += `\n  - ${lookLine(a.look)}`
-  if (a.srcset) line += `\n  - srcset on the site (reference only; serve the local file): ${inlineCode(a.srcset)}`
+  if (a.srcset) line += `\n  - srcset on the site (${packaged ? 'reference only; serve the local file' : 'reference only'}): ${inlineCode(a.srcset)}`
   for (const s of a.sources ?? []) {
     const bits = [s.media && `media ${inlineCode(s.media)}`, s.type && `type ${inlineCode(s.type)}`, `srcset ${inlineCode(s.srcset)}`].filter(Boolean)
     line += `\n  - source: ${bits.join(', ')}`

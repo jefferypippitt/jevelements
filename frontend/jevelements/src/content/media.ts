@@ -92,16 +92,16 @@ interface Job {
 
 // Downloads and uploads everything, and records the names the prompt refers to (Asset.file,
 // CodeRef.file, Capture.saved).
-export async function saveMedia(capture: Capture, shot: Shot | undefined, onProgress?: (done: number, total: number) => void): Promise<void> {
+export async function saveMedia(capture: Capture, shot: Shot | undefined, onProgress?: (done: number, total: number) => void, signal?: AbortSignal): Promise<void> {
   const saved: SavedFiles = { files: {}, uploaded: [], screenshot: shot?.file, failed: [] }
   try {
-    await save(capture, shot, saved, onProgress)
+    await save(capture, shot, saved, onProgress, signal)
   } finally {
     capture.saved = saved
   }
 }
 
-async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles, onProgress?: (done: number, total: number) => void): Promise<void> {
+async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles, onProgress?: (done: number, total: number) => void, signal?: AbortSignal): Promise<void> {
   const used = new Set<string>()
   const unique = (wanted: string) => {
     let name = wanted
@@ -197,7 +197,7 @@ async function save(capture: Capture, shot: Shot | undefined, saved: SavedFiles,
   const total = queue.length
   let finished = 0
   const worker = async () => {
-    for (let next = queue.shift(); next; next = queue.shift()) {
+    for (let next = queue.shift(); next && !signal?.aborted; next = queue.shift()) {
       await next()
       onProgress?.(++finished, total)
     }

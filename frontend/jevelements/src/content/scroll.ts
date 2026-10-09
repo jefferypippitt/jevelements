@@ -133,12 +133,13 @@ interface Sample {
 export interface ScrollOptions {
   runtime?: RuntimeData
   onProgress?: (done: number, total: number) => void
+  signal?: AbortSignal // the capture was stopped: stop scrolling, restore the page
 }
 
 export async function recordScrollMotion(
   root: Element,
   visible: [Element, CapturedNode][],
-  { runtime, onProgress }: ScrollOptions = {},
+  { runtime, onProgress, signal }: ScrollOptions = {},
 ): Promise<ScrollStory | null> {
   const tracked = visible.slice(0, MAX_ELEMENTS)
   const startY = window.scrollY
@@ -211,6 +212,7 @@ export async function recordScrollMotion(
     await scrollTo(positions[0], settle * 2)
     observer.observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ATTRS })
     for (let i = 0; i < positions.length; i++) {
+      if (signal?.aborted) break
       const y = positions[i]
       currentProgress = progressAt(y)
       if (i > 0) await scrollTo(y)

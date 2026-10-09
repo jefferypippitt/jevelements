@@ -4,6 +4,7 @@
 // can't call chrome.tabs.captureVisibleTab or chrome.scripting, and their fetches are bound by the
 // host page's CORS rules, so all of that happens here.
 import { captureForAnalysis } from '../shared/analyze'
+import { blockedMediaUrl } from '../shared/fetch-policy'
 import { extensionFor, fromBase64, MAX_FILE_BYTES, toBase64 } from '../shared/files'
 import { sendToInspector } from '../shared/inject'
 import { getSettings } from '../shared/storage'
@@ -86,7 +87,7 @@ chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendRe
     case 'jev:analyze':
       return reply(analyze(message))
     case 'jev:save-media':
-      return reply(saveMedia(message))
+      return reply(saveMedia(message, sender.url ?? sender.tab?.url))
     case 'jev:upload':
       return reply(uploadChunk(message))
     case 'jev:project':
@@ -139,10 +140,11 @@ async function analyze({ capture }: AnalyzeMessage): Promise<AnalyzeResponse> {
 
 // ---------- media ----------
 
-async function download(src: string): Promise<{ blob: Blob; ext: string }> {
-  // The service worker has host access to every site, so cross-origin media loads without CORS.
-  const res = await fetch(src, { credentials: 'include', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
+async function download(src: string, pageUrl: string | undefined): Promise<{ blob: Blob; ext: string }> {
+  // No cookies: the URL comes from the page, and the worker's host access would otherwise let it send the user's cookies anywhere. Same-origin files that need them are fetched by the page itself (content/media.ts fetchInPage).
+  const res = await fetch(src, { credentials: 'omit', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (res.redirected && blockedMediaUrl(res.url, pageUrl)) throw new Error('redirected to a private-network address')
   const type = res.headers.get('content-type') ?? ''
   if (/text\/html/i.test(type)) throw new Error('got an HTML page instead of a file (hotlink protection or login)')
   const blob = await res.blob()
@@ -154,10 +156,12 @@ async function download(src: string): Promise<{ blob: Blob; ext: string }> {
 }
 
 // Downloads one file and hands it straight to the backend: the page never holds the bytes.
-async function saveMedia({ src, captureId, name, upload, folder = 'media' }: SaveMediaMessage): Promise<SaveMediaResponse> {
+async function saveMedia({ src, captureId, name, upload, folder = 'media' }: SaveMediaMessage, pageUrl: string | undefined): Promise<SaveMediaResponse> {
+  const blocked = blockedMediaUrl(src, pageUrl)
+  if (blocked) return { error: `download refused: ${blocked}` }
   let file: { blob: Blob; ext: string }
   try {
-    file = await download(src)
+    file = await download(src, pageUrl)
   } catch (err) {
     return { error: `download failed: ${errorText(err)}` }
   }
