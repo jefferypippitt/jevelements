@@ -220,6 +220,7 @@ export class Inspector {
   private resultActions: HTMLDivElement | null = null
   private textLog: TextLog | null = null // text the page animates while the picker is open
   private capturing = false
+  private stopping: AbortController | null = null // the running capture's stop switch
 
   constructor() {
     loadOverlayFont()
@@ -419,7 +420,16 @@ export class Inspector {
 
   // The gathering log: finished steps stay put, the current one shimmers.
   private showStatus(steps: StatusStep[]) {
+    if (this.stopping?.signal.aborted) return // a stop was asked for: leave "Stopping the capture…" showing
     this.showPanel([el('div', { className: 'markers' }, steps.map(statusMarker))])
+  }
+
+  // The user closed the drawer while a capture runs: every stage ends as if out of time (restoring the
+  // page as it always does), then runCapture closes the drawer instead of showing a result.
+  private stopCapture() {
+    if (!this.stopping || this.stopping.signal.aborted) return
+    this.stopping.abort()
+    this.showPanel([el('div', { className: 'markers' }, [statusMarker({ label: 'Stopping the capture…', state: 'active' })])])
   }
 
   // The background worker marks the tab while a capture runs, so if the page goes away mid-capture
@@ -427,11 +437,13 @@ export class Inspector {
   private async capture(target: Element) {
     if (this.capturing) return // one capture at a time: a second one would fight the first over the page
     this.capturing = true
+    this.stopping = new AbortController()
     await this.markCapturing(true)
     try {
       await this.runCapture(target)
     } finally {
       this.capturing = false
+      this.stopping = null
       void this.markCapturing(false)
     }
   }
@@ -467,9 +479,18 @@ export class Inspector {
   }
 
   private async runCapture(target: Element) {
+    const signal = this.stopping?.signal
+    // Between stages: a stopped capture goes no further (the catch below closes the drawer).
+    const stopIfAsked = () => {
+      if (signal?.aborted) throw new Error('capture stopped')
+    }
     this.stop()
     const rect = target.getBoundingClientRect()
     const screenshot = await this.screenshot(target)
+    if (signal?.aborted) {
+      this.closePanel()
+      return
+    }
 
     const frame: StatusStep = { label: screenshot ? 'Captured the frame' : 'Frame unavailable', state: 'done' }
     let steps: StatusStep[] = [frame, { label: 'Reading structure', state: 'active' }]
@@ -492,6 +513,7 @@ export class Inspector {
         ),
         inspectRuntime(target),
       ])
+      stopIfAsked()
       capture.screenshot = screenshot
       if (parts.length) capture.parts = parts
       capture.placement = placement
@@ -501,6 +523,7 @@ export class Inspector {
         for (const embed of capture.embeds) if (runtime.offscreen?.includes(embed.target)) embed.offscreen = true
       }
       if (screenshot) await addSnapshots(capture, screenshot, rect)
+      stopIfAsked()
 
       steps = [frame, { label: 'Read the structure', state: 'done' }, { label: 'Watched motion', state: 'done' }]
       if (wantsScrollRecording(capture, runtime, target)) {
@@ -509,8 +532,10 @@ export class Inspector {
         progress('Recording the scroll story')
         const story = await recordScroll({
           runtime,
+          signal,
           onProgress: (done, total) => progress(`Recording the scroll story (${Math.min(99, Math.round((done / total) * 100))}%)`),
         })
+        stopIfAsked()
         if (story) {
           // Images the story swapped in and out, and image sequences drawn onto a canvas.
           mergeAssets(capture, story.media ?? [])
@@ -534,6 +559,7 @@ export class Inspector {
         let earlier = 0
         let current = 0
         const report = await recordInteractions({
+          signal,
           onProgress: (done, total) => progress(`Playing hover & click (${done + 1}/${total})`),
           onExplore: (_component, states) => {
             if (states === 1) [earlier, current] = [earlier + current, 0] // the next component starts
@@ -542,6 +568,7 @@ export class Inspector {
           },
           onFocus: (focus) => trace.show(focus),
         }).finally(() => trace.stop())
+        stopIfAsked()
         mergeAssets(capture, report.media ?? [])
         report.media = undefined
         capture.interactions = report
@@ -564,11 +591,13 @@ export class Inspector {
         progress('Sweeping the pointer over the section')
         const trace = new Trace(this.shadow)
         const sweep = await sweepHover(target, {
+          signal,
           shoot: (r) => this.shootUnder(r),
           drawerEdge: () => this.drawerEdge(),
           onProgress: progress,
           onFocus: (focus) => trace.show(focus),
         }).finally(() => trace.stop())
+        stopIfAsked()
         if (sweep.hovers.length) capture.hoverSweep = sweep.hovers
         const reacted = sweep.hovers.length
         const label = reacted
@@ -588,11 +617,13 @@ export class Inspector {
         progress('Click sweep over the section')
         const trace = new Trace(this.shadow)
         const sweep = await sweepClicks(target, {
+          signal,
           shoot: (r) => this.shootUnder(r),
           drawerEdge: () => this.drawerEdge(),
           onProgress: progress,
           onFocus: (focus) => trace.show(focus),
         }).finally(() => trace.stop())
+        stopIfAsked()
         if (sweep.clicks.length) capture.clickSweep = sweep.clicks
         if (sweep.skipped.length && capture.interactions) capture.interactions.skipped.push(...sweep.skipped)
         const label = sweep.clicks.length
@@ -609,6 +640,7 @@ export class Inspector {
         steps = [...steps, { label: 'Comparing light and dark mode', state: 'active' }]
         this.showStatus(steps)
         const schemes = await compareSchemes(target, { take: (r) => this.shootUnder(r), right: () => this.drawerEdge() })
+        stopIfAsked()
         capture.schemes = schemes
         mergeAssets(capture, schemes.media ?? [])
         schemes.media = undefined
@@ -622,6 +654,7 @@ export class Inspector {
         steps = [...steps, { label: 'Finding the canvas code', state: 'active' }]
         this.showStatus(steps)
         capture.code = await findCanvasCode(target, capture)
+        stopIfAsked()
         const found = capture.code.length
         steps = [...steps.slice(0, -1), { label: found ? `Found the canvas code in ${found} script${found === 1 ? '' : 's'}` : 'No canvas code found in the page scripts', state: 'done' }]
       }
@@ -638,6 +671,7 @@ export class Inspector {
         } finally {
           this.host.style.display = ''
         }
+        stopIfAsked()
         steps = [...steps.slice(0, -1), { label: capture.fullScreenshot ? 'Screenshotted the full section' : 'Full section screenshot unavailable', state: 'done' }]
       }
 
@@ -647,7 +681,8 @@ export class Inspector {
         const before = steps
         const progress = (text: string) => this.showStatus([...before, { label: text, state: 'active' }])
         progress('Saving images, video & canvas')
-        await saveMedia(capture, shot, (done, total) => progress(`Saving images, video & canvas (${done}/${total})`))
+        await saveMedia(capture, shot, (done, total) => progress(`Saving images, video & canvas (${done}/${total})`), signal)
+        stopIfAsked()
         const saved = capture.saved
         const failed = saved?.failed.length ?? 0
         const files = saved?.uploaded.filter((p) => p.startsWith('capture/')).length ?? 0
@@ -667,6 +702,7 @@ export class Inspector {
       steps = [...steps, { label: 'Classifying the section', state: 'active' }]
       this.showStatus(steps)
       const res = await this.analyze(capture)
+      stopIfAsked()
       if ('error' in res) console.info('[jevelements] jev analysis skipped:', res.error)
       else capture.analysis = res.analysis
 
@@ -682,6 +718,10 @@ export class Inspector {
       this.textLog = null
       this.renderResult(capture, packaged, shot)
     } catch (err) {
+      if (signal?.aborted) {
+        this.closePanel() // stopped by the user: no result, no error
+        return
+      }
       console.error('[jevelements] capture failed', err)
       const message = err instanceof Error ? err.message : String(err)
       this.showStatus([...steps.filter((step) => step.state !== 'active'), { label: `Capture failed: ${message}`, state: 'error' }])
@@ -886,6 +926,11 @@ export class Inspector {
 
   // Slide a drawer (and any drawers stacked on it) out to the right, then remove them.
   private dismissDrawer(panel: HTMLDivElement) {
+    // While a capture runs, closing its drawer (✕, Esc, swipe) stops the capture; the drawer closes when it has.
+    if (this.capturing) {
+      panel.style.transform = '' // a swipe left it part-way out
+      return this.stopCapture()
+    }
     const index = this.drawers.indexOf(panel)
     if (index < 0) return
     const closing = this.drawers.splice(index)
@@ -911,7 +956,11 @@ export class Inspector {
   private onPanelKey = (e: KeyboardEvent) => {
     const top = this.drawers.at(-1)
     // A synthetic Escape is the capture closing a menu it opened (play.ts), not the user.
-    if (e.isTrusted && e.key === 'Escape' && !this.active && top) this.dismissDrawer(top)
+    if (e.isTrusted && e.key === 'Escape' && !this.active && top) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      this.dismissDrawer(top)
+    }
   }
 
   // The result drawer leads with the rendered prompt. Copy still sends the original markdown.

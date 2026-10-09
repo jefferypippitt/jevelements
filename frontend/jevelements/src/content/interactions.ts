@@ -54,6 +54,7 @@ export interface InteractionOptions {
   onProgress?: (done: number, total: number) => void
   onExplore?: (component: string, states: number) => void // a component's state explorer found another state
   onFocus?: (focus: TraceFocus | null) => void // the control about to be played, for the on-page trace
+  signal?: AbortSignal // the capture was stopped: no more hovers or clicks
 }
 
 interface Candidate {
@@ -179,7 +180,7 @@ export async function recordInteractions(
   tracked: [Element, CapturedNode][],
   hoverRules: HoverRule[],
   layers: LayerReader,
-  { onProgress, onExplore, onFocus }: InteractionOptions = {},
+  { onProgress, onExplore, onFocus, signal }: InteractionOptions = {},
   moved: Set<Element> = new Set(), // changed by itself during the capture's idle watch (timeline.ts)
 ): Promise<InteractionReport> {
   const started = performance.now()
@@ -203,7 +204,7 @@ export async function recordInteractions(
 
   try {
     for (const [n, c] of list.entries()) {
-      if (performance.now() - started > BUDGET_MS) break
+      if (performance.now() - started > BUDGET_MS || signal?.aborted) break
       onProgress?.(n, list.length)
       const live = relocate(root, c)
       if (!live || !visible(live)) continue
@@ -303,13 +304,14 @@ export async function recordInteractions(
       const size = (c: Component) => allIn(c.root).filter((el) => clickSignal(el)).length
       found.components.sort((a, b) => size(a) - size(b))
       for (const [i, component] of found.components.entries()) {
+        if (signal?.aborted) break
         if (!component.root.isConnected) continue
         // An even share of what's left, so one big demo can't starve the others.
         const deadline = performance.now() + (until - performance.now()) / (found.components.length - i)
         const name = label(component.root)
         onExplore?.(name, 1)
         const autoplay = Array.from(moved).some((el) => containsDeep(component.root, el))
-        const explored = await exploreComponent(component, { section: root, layers, media, deadline, autoplay, moved, onState: (states) => onExplore?.(name, states), onFocus })
+        const explored = await exploreComponent(component, { section: root, layers, media, deadline, autoplay, moved, onState: (states) => onExplore?.(name, states), onFocus, signal })
         report.tested.click += explored.clicks
         report.items.push(...explored.items)
         report.skipped.push(...explored.skipped)

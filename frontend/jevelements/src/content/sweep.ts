@@ -81,6 +81,7 @@ export interface SweepOptions {
   drawerEdge?: () => number
   onProgress?: (text: string) => void
   onFocus?: (focus: TraceFocus | null) => void
+  signal?: AbortSignal // the capture was stopped: end the sweep as if out of time
 }
 
 export interface SweepResult {
@@ -1071,7 +1072,7 @@ async function place(el: Element, root: Element, right = window.innerWidth): Pro
   return { box, view: fractions(sweptRect), seen: fractions(onScreen(box, right) ?? screenRect), outsider }
 }
 
-async function sweepOne(el: Element, root: Element, { shoot, onProgress, onFocus, drawerEdge }: SweepOptions, deadline: number, step: string): Promise<HoverSweep | null> {
+async function sweepOne(el: Element, root: Element, { shoot, onProgress, onFocus, drawerEdge, signal }: SweepOptions, deadline: number, step: string): Promise<HoverSweep | null> {
   const kind = el instanceof HTMLCanvasElement ? 'canvas' : 'section'
   const canvas = el instanceof HTMLCanvasElement ? el : undefined
   const name = label(el)
@@ -1266,7 +1267,7 @@ async function sweepOne(el: Element, root: Element, { shoot, onProgress, onFocus
   ]
   let outOfTime = false
   for (const [axis, a, b, dir] of strokes) {
-    if (now() > deadline) {
+    if (now() > deadline || !!signal?.aborted) {
       outOfTime = true
       break
     }
@@ -1394,7 +1395,7 @@ async function sweepOne(el: Element, root: Element, { shoot, onProgress, onFocus
       if (!Array.from(byOwner.keys()).some((o) => containsDeep(o, m) || containsDeep(m, o))) byOwner.set(m, [])
     }
     for (const [owner, list] of Array.from(byOwner).slice(0, MAX_LOCAL)) {
-      if (now() > deadline) {
+      if (now() > deadline || !!signal?.aborted) {
         outOfTime = true
         break
       }
@@ -1426,7 +1427,7 @@ async function sweepOne(el: Element, root: Element, { shoot, onProgress, onFocus
   let beforeLeavePixels: Pixels | null = null
   // Only for what reacted: nothing to time otherwise.
   const reacted = found.some((f) => !local.has(f)) || hits.some((s) => (s.score ?? 0) > threshold)
-  if (reacted && now() < deadline + 5000) {
+  if (reacted && now() < deadline + 5000 && !signal?.aborted) {
     const a = at(A)
     await pointer.travel(a.x, a.y)
     await hold()
@@ -1672,6 +1673,7 @@ export async function sweepHover(root: Element, options: SweepOptions = {}): Pro
   const unblock = blockRealPointer()
   try {
     for (const [i, el] of list.entries()) {
+      if (options.signal?.aborted) break
       if (now() > until || !el.isConnected) continue
       const step = `Sweeping the pointer over ${label(el)}${list.length > 1 ? ` (${i + 1}/${list.length})` : ''}`
       const hover = await sweepOne(el, root, options, Math.min(until, now() + BUDGET_MS), step)
@@ -1868,7 +1870,7 @@ async function readCursor(el: Element, root: Element, view: View, at: (p: Point)
   return { rest, regions: regions.slice(0, MAX_CURSOR_REGIONS), map, at: cellAt }
 }
 
-async function clickOne(el: Element, root: Element, { shoot, onProgress, onFocus, drawerEdge }: SweepOptions, deadline: number, step: string): Promise<ClickSweep | null> {
+async function clickOne(el: Element, root: Element, { shoot, onProgress, onFocus, drawerEdge, signal }: SweepOptions, deadline: number, step: string): Promise<ClickSweep | null> {
   const kind = el instanceof HTMLCanvasElement ? 'canvas' : 'section'
   const canvas = el instanceof HTMLCanvasElement ? el : undefined
   const name = label(el)
@@ -1996,7 +1998,7 @@ async function clickOne(el: Element, root: Element, { shoot, onProgress, onFocus
   let leftOut = 0
   let stoppedBy: 'time' | 'quiet' | null = null
   for (const { p, cell } of points) {
-    if (now() > deadline) {
+    if (now() > deadline || !!signal?.aborted) {
       stoppedBy = 'time'
       break
     }
@@ -2050,7 +2052,7 @@ async function clickOne(el: Element, root: Element, { shoot, onProgress, onFocus
   // flings on with inertia, springs back) is told apart from what the pointer's position does anyway.
   const drag: string[] = []
   let dragged = false
-  if (canvas && now() < deadline + 5000) {
+  if (canvas && now() < deadline + 5000 && !signal?.aborted) {
     const y = mid(view.y0, view.y1, 0.5)
     const a = at({ x: mid(view.x0, view.x1, 0.25), y })
     const b = at({ x: mid(view.x0, view.x1, 0.75), y })
@@ -2300,6 +2302,7 @@ export async function sweepClicks(root: Element, options: SweepOptions = {}): Pr
   const unblock = blockRealPointer()
   try {
     for (const [i, el] of list.entries()) {
+      if (options.signal?.aborted) break
       if (now() > until || !el.isConnected) continue
       const step = `Click sweep over ${label(el)}${list.length > 1 ? ` (${i + 1}/${list.length})` : ''}`
       const click = await clickOne(el, root, options, Math.min(until, now() + CLICK_BUDGET_MS), step)
