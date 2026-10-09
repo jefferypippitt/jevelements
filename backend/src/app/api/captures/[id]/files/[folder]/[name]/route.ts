@@ -1,4 +1,5 @@
 import { allowedOrigin, authorized, corsHeaders } from '@/lib/http'
+import { NOT_STORED, storesLocally } from '@/lib/local'
 import { filePath, MAX_FILE_BYTES, readCaptureFile, saveFile } from '@/lib/store'
 
 type Context = { params: Promise<{ id: string; folder: string; name: string }> }
@@ -34,6 +35,7 @@ export function OPTIONS(request: Request) {
 // The extension uploads one file per request, as the raw body; `?offset=N` appends a later chunk.
 export async function PUT(request: Request, { params }: Context) {
   const headers = corsHeaders(request, METHODS)
+  if (!storesLocally()) return Response.json({ error: NOT_STORED }, { status: 404, headers })
   if (!allowedOrigin(request)) return Response.json({ error: 'Forbidden origin' }, { status: 403, headers })
   if (!authorized(request)) return Response.json({ error: 'Unauthorized' }, { status: 401, headers })
 
@@ -55,6 +57,7 @@ export async function PUT(request: Request, { params }: Context) {
 
 // No token: opened as plain links, and the capture id is an unguessable UUID.
 export async function GET(_request: Request, { params }: Context) {
+  if (!storesLocally()) return new Response('Not found', { status: 404 })
   const { id, folder, name } = await params
   const file = filePath(id, [folder, name])
   const body = file && (await readCaptureFile(file))

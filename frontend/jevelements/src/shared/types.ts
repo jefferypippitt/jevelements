@@ -450,7 +450,7 @@ export interface ClickSweep {
 export interface SavedFiles {
   files: Record<string, string> // http(s) source URL → file name in public/capture/ (data: and blob: files only on Asset.file)
   uploaded: string[] // paths under public/ that are in `archive` ("capture/image-01.jpg", "reference/section.png")
-  archive?: string // backend URL of the app zip; missing when nothing could be uploaded (backend not running)
+  archive?: string // backend URL of the app zip; missing when nothing could be uploaded (local backend not running, or a deployed one, which stores nothing)
   screenshot?: string // name of the one screenshot (the initial look), in public/reference/ when uploaded
   failed: { src: string; reason: string }[]
   fonts?: Record<string, string> // font file URL → file name in public/fonts/
@@ -573,7 +573,7 @@ export type SaveMediaResponse = { file: string; upload?: UploadResult } | { erro
 // Bytes only the page could read (blob: URLs, cookie-bound files, canvas snapshots, screenshots), sent
 // on to the backend in base64 chunks. Offset 0 starts the file; later chunks append.
 export type UploadMessage = { type: 'jev:upload'; captureId: string; folder: 'media' | 'frames' | 'code' | 'fonts'; name: string; base64: string; offset: number }
-// `archive` is where the rebuild downloads every uploaded file; `unreachable` means the backend isn't running.
+// `archive` is where the rebuild downloads every uploaded file; `unreachable` means stop uploading: the backend isn't running, or it doesn't store files.
 export type UploadResult = { archive: string } | { error: string; unreachable?: boolean }
 
 // Names the app and stores the prompt on the backend, so its zip comes out as <name>/ with PROMPT.md.

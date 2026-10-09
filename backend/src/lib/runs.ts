@@ -1,9 +1,11 @@
 // A short log of /api/analyze calls: which provider answered, and why TypeSafe was skipped when the
 // AI Gateway fallback ran. The status page (app/page.tsx) reads it. Kept as one JSON file in the OS
 // temp directory, next to the capture staging, so route handlers and the page see the same log.
+// Local development only: in production nothing is recorded, so no captured page URL is kept.
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { storesLocally } from './local'
 
 const FILE = path.join(tmpdir(), 'jevelements-runs.json')
 const MAX_RUNS = 200
@@ -26,6 +28,7 @@ let pending: Promise<void> = Promise.resolve()
 
 // Serialized so two analyses finishing together don't overwrite each other's entry.
 export function recordRun(run: Run): Promise<void> {
+  if (!storesLocally()) return Promise.resolve()
   pending = pending.then(async () => {
     const runs = [run, ...(await readRuns())].slice(0, MAX_RUNS)
     await mkdir(path.dirname(FILE), { recursive: true })
@@ -38,6 +41,7 @@ export function recordRun(run: Run): Promise<void> {
 
 // Newest first.
 export async function readRuns(): Promise<Run[]> {
+  if (!storesLocally()) return []
   try {
     const runs: unknown = JSON.parse(await readFile(FILE, 'utf8'))
     return Array.isArray(runs) ? (runs as Run[]) : []

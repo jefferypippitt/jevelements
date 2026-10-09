@@ -1,4 +1,5 @@
 import { allowedOrigin, authorized, corsHeaders, sentJson } from '@/lib/http'
+import { NOT_STORED, storesLocally } from '@/lib/local'
 import { isCaptureId, isProjectMeta, MAX_PROMPT_CHARS, saveProject } from '@/lib/store'
 
 type Context = { params: Promise<{ id: string }> }
@@ -13,6 +14,7 @@ export function OPTIONS(request: Request) {
 // sends the prompt once the capture is classified; the zip route builds the app from it.
 export async function PUT(request: Request, { params }: Context) {
   const headers = corsHeaders(request, METHODS)
+  if (!storesLocally()) return Response.json({ error: NOT_STORED }, { status: 404, headers })
   if (!allowedOrigin(request)) return Response.json({ error: 'Forbidden origin' }, { status: 403, headers })
   if (!authorized(request)) return Response.json({ error: 'Unauthorized' }, { status: 401, headers })
   if (!sentJson(request)) return Response.json({ error: 'Content-Type must be application/json' }, { status: 415, headers })

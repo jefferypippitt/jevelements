@@ -652,13 +652,15 @@ export class Inspector {
         const failed = saved?.failed.length ?? 0
         const files = saved?.uploaded.filter((p) => p.startsWith('capture/')).length ?? 0
         const named = new Set([...Object.values(saved?.files ?? {}), ...capture.assets.map((a) => a.file)].filter(Boolean)).size
+        // No zip is expected from a deployed backend (it stores nothing), so this is not an error: the
+        // prompt points at the files on the live site instead. Locally, the console says why.
         const unsaved = !saved?.archive && (named > 0 || failed > 0)
         const savedLabel = saved?.archive
           ? `Zipped ${files} file${files === 1 ? '' : 's'} for public/${failed ? `, ${failed} failed` : ''}`
           : unsaved
-            ? 'Files not saved: start the backend (pnpm dev in backend/) and capture again'
+            ? 'Images and video linked from the live site'
             : 'No images or video'
-        steps = [...before, { label: savedLabel, state: unsaved ? 'error' : 'done' }]
+        steps = [...before, { label: savedLabel, state: 'done' }]
       }
 
       // Always try the jev backend; if it isn't running, the local prompt is still complete.

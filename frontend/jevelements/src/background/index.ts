@@ -185,9 +185,10 @@ async function put(captureId: string, folder: string, name: string, body: Blob |
   }
   if (!res.ok) {
     const reason = ((await res.json().catch(() => null)) as { error?: string } | null)?.error
-    return { error: `backend upload failed: ${reason ?? `HTTP ${res.status}`}` }
+    // 404: a deployed backend keeps no capture files (backend/src/lib/local.ts), so stop uploading.
+    return { error: `backend upload failed: ${reason ?? `HTTP ${res.status}`}`, unreachable: res.status === 404 || undefined }
   }
-  return { archive: new URL(`/api/captures/${captureId}/zip`, backendUrl).href }
+  return { archive:new URL(`/api/captures/${captureId}/zip`, backendUrl).href }
 }
 
 async function saveProject({ captureId, name, component, file, prompt }: ProjectMessage): Promise<ProjectResponse> {

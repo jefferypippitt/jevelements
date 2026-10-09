@@ -1,4 +1,5 @@
 import { appZip } from '@/lib/archive'
+import { storesLocally } from '@/lib/local'
 import { isCaptureId } from '@/lib/store'
 
 type Context = { params: Promise<{ id: string }> }
@@ -7,6 +8,7 @@ type Context = { params: Promise<{ id: string }> }
 // No token, like the single-file route: the extension starts it as a plain download, and the capture id
 // is an unguessable UUID.
 export async function GET(_request: Request, { params }: Context) {
+  if (!storesLocally()) return new Response('Not found', { status: 404 })
   const { id } = await params
   const app = isCaptureId(id) ? await appZip(id) : null
   if (!app) return new Response('Not found', { status: 404 })
