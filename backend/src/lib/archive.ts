@@ -1,19 +1,19 @@
 // A capture as one Next.js app zip, everything under a single `<name>/` folder: the scaffold
-// (scaffold.ts), PROMPT.md, and public/ with the files the extension saved — media → public/capture/, fonts → public/fonts/,
+// (scaffold.ts), PROMPT.md, REMIX.md, and public/ with the files the extension saved — media → public/capture/, fonts → public/fonts/,
 // the screenshot → public/reference/, canvas source code → public/reference/code/. Extracting it gives
 // a ready app; nothing is written anywhere but the response.
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { crc32, deflateRawSync } from 'node:zlib'
 import { scaffold } from './scaffold'
-import { captureDir, FOLDERS, listFiles, readProject, type Folder } from './store'
+import { captureDir, FOLDERS, listFiles, readProject, type Folder, type ProjectMeta } from './store'
 
 // Paths the prompt refers to (/capture/…, /reference/…), so keep them in sync with
 // frontend/jevelements/src/shared/prompt.ts.
 const DIRS: Record<Folder, string> = { media: 'public/capture', frames: 'public/reference', code: 'public/reference/code', fonts: 'public/fonts' }
 
 // Until the extension sends project.json, the files still download as a generic app.
-const FALLBACK = { name: 'section', component: 'Section', file: 'section', prompt: '' }
+const FALLBACK: ProjectMeta = { name: 'section', component: 'Section', file: 'section', prompt: '' }
 
 interface Entry {
   name: string
@@ -35,6 +35,7 @@ export async function appZip(id: string): Promise<{ name: string; zip: Buffer } 
   const entries = [
     ...scaffold(project).map((f) => text(f.path, f.body)),
     ...(project.prompt ? [text('PROMPT.md', project.prompt)] : []),
+    ...(project.remix ? [text('REMIX.md', project.remix)] : []),
     ...assets,
   ].map((e) => ({ ...e, name: `${project.name}/${e.name}` }))
   return { name: project.name, zip: zip(entries) }

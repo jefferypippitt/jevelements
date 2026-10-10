@@ -576,8 +576,8 @@ export type UploadMessage = { type: 'jev:upload'; captureId: string; folder: 'me
 // `archive` is where the rebuild downloads every uploaded file; `unreachable` means stop uploading: the backend isn't running, or it doesn't store files.
 export type UploadResult = { archive: string } | { error: string; unreachable?: boolean }
 
-// Names the app and stores the prompt on the backend, so its zip comes out as <name>/ with PROMPT.md.
-export type ProjectMessage = { type: 'jev:project'; captureId: string; name: string; component: string; file: string; prompt: string }
+// Names the app and stores the prompts on the backend, so its zip comes out as <name>/ with PROMPT.md and REMIX.md.
+export type ProjectMessage = { type: 'jev:project'; captureId: string; name: string; component: string; file: string; prompt: string; remix: string }
 export type ProjectResponse = { name: string; zip: string } | { error: string }
 
 // Makes sure the page probe is running in the tab's page world (it isn't on pages that loaded before

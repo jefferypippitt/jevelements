@@ -35,7 +35,7 @@ export async function PUT(request: Request, { params }: Context) {
     )
   }
 
-  const { name, component, file, prompt } = body
-  await saveProject(id, { name, component, file, prompt })
+  const { name, component, file, prompt, remix } = body
+  await saveProject(id, { name, component, file, prompt, ...(remix ? { remix } : {}) })
   return Response.json({ name, zip: new URL(`/api/captures/${id}/zip`, request.url).href }, { headers })
 }

@@ -81,11 +81,14 @@ interface StatusStep {
   state: MarkerState
 }
 
-// The prompt to copy, and why the app zip failed, if it did (shown above the prompt).
+// The prompts to copy (1:1 and remix), and why the app zip failed, if it did (shown above the prompt).
 interface Packaged {
   prompt: string
+  remix: string
   note: string | null
 }
+
+const prompts = (capture: Capture) => ({ prompt: buildPrompt(capture), remix: buildPrompt(capture, 'remix') })
 
 function statusMarker(step: StatusStep) {
   const row = el('div', { className: 'marker' })
@@ -173,7 +176,7 @@ function button(variant: ButtonVariant, text: string, onclick: () => void) {
   return el('button', { type: 'button', className: `btn btn-${variant}`, textContent: text, onclick })
 }
 
-// Temporarily swap a button's label, e.g. "Copy prompt" → "Copied".
+// Temporarily swap a button's label, e.g. "Copy Prompt" → "Copied".
 function flash(btn: HTMLButtonElement, text: string) {
   const original = btn.textContent
   btn.textContent = text
@@ -473,7 +476,7 @@ export class Inspector {
     const note = reloaded
       ? 'Reloading the page ends a capture that is running. Pick the section again.'
       : `The capture of ${where(from)} was still running when the tab opened another page, which ends it. Go back and pick the section again.`
-    const goBack = !reloaded && button('primary', 'Go back', () => history.back())
+    const goBack = !reloaded && button('primary', 'Go Back', () => history.back())
     const pick = button(reloaded ? 'primary' : 'outline', LABELS.newSection, () => this.start())
     this.showPanel([el('div', { className: 'markers' }, [statusMarker(step)]), el('p', { className: 'note', textContent: note })], goBack ? [goBack, pick] : [pick])
   }
@@ -707,7 +710,7 @@ export class Inspector {
       else capture.analysis = res.analysis
 
       // The classification names the app, so the zip is packaged last.
-      let packaged: Packaged = { prompt: buildPrompt(capture), note: null }
+      let packaged: Packaged = { ...prompts(capture), note: null }
       if (capture.saved?.archive) {
         steps = [...steps.slice(0, -1), { label: `Packaging ${projectName(capture)}.zip`, state: 'active' }]
         this.showStatus(steps)
@@ -838,23 +841,23 @@ export class Inspector {
     const name = projectName(capture)
     const { file, component } = componentNames(kitBase(capture))
     capture.project = { name, zip }
-    const prompt = buildPrompt(capture)
-    const message: BackgroundMessage = { type: 'jev:project', captureId: capture.id, name, component, file, prompt }
+    const { prompt, remix } = prompts(capture)
+    const message: BackgroundMessage = { type: 'jev:project', captureId: capture.id, name, component, file, prompt, remix }
     const res: ProjectResponse = await askExtension(message)
     if ('error' in res) {
       console.warn('[jevelements] app zip not packaged:', res.error)
       capture.project = undefined
-      return { prompt: buildPrompt(capture), note: `Couldn't package the app zip (${res.error}). Make sure the backend is running and capture again.` }
+      return { ...prompts(capture), note: `Couldn't package the app zip (${res.error}). Make sure the backend is running and capture again.` }
     }
     // A plain link: the backend's Content-Disposition names the file, so no downloads permission is needed.
     el('a', { href: res.zip, download: `${res.name}.zip` }).click()
-    return { prompt, note: null }
+    return { prompt, remix, note: null }
   }
 
   // ---------- drawers ----------
 
   // Results show in non-modal drawers from the right, like shadcn's Drawer with modal={false}: no
-  // backdrop, the page stays usable, outside clicks don't close them. "View screenshot" opens a nested
+  // backdrop, the page stays usable, outside clicks don't close them. "View Screenshot" opens a nested
   // drawer on top; the one behind shrinks and peeks out (shadcn's nested drawer). Swiping a drawer
   // right, its ✕, or Esc closes the topmost one.
 
@@ -964,7 +967,7 @@ export class Inspector {
   }
 
   // The result drawer leads with the rendered prompt. Copy still sends the original markdown.
-  private renderResult(capture: Capture, { prompt, note }: Packaged, shot: Shot | undefined) {
+  private renderResult(capture: Capture, { prompt, remix, note }: Packaged, shot: Shot | undefined) {
     const children: Node[] = []
     const tags = captureTags(capture)
     if (tags.length) children.push(el('div', { className: 'tags' }, tags.map((tag) => el('span', { className: 'tag', textContent: tag }))))
@@ -981,6 +984,7 @@ export class Inspector {
     children.push(renderPrompt(prompt))
 
     const copyPrompt = asyncButton('primary', LABELS.copyPrompt, async () => ((await this.copyText(prompt)) ? LABELS.copied : LABELS.copyFailed))
+    const copyRemix = asyncButton('outline', LABELS.copyRemix, async () => ((await this.copyText(remix)) ? LABELS.copied : LABELS.copyFailed))
     const copyShot = shot && asyncButton('outline', LABELS.copyScreenshot, () => this.copyScreenshot(shot.dataUrl, shot.file))
     const viewShot = shot && button('outline', LABELS.viewScreenshot, () => this.openScreenshotDrawer(shot))
     const newSection = button('outline', LABELS.newSection, () => this.start())
@@ -989,7 +993,7 @@ export class Inspector {
       return buttons.length ? [el('div', { className: 'row' }, buttons)] : []
     }
 
-    this.showPanel(children, [copyPrompt, ...row(copyShot, viewShot), newSection])
+    this.showPanel(children, [copyPrompt, copyRemix, ...row(copyShot, viewShot), newSection])
   }
 
   // Nested drawer with one screenshot in a fixed preview frame (see layoutPreview).

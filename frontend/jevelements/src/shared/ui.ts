@@ -3,12 +3,13 @@
 import type { Capture } from './types'
 
 export const LABELS = {
-  newSection: 'New section',
-  copyPrompt: 'Copy prompt',
-  viewScreenshot: 'View screenshot',
-  copyScreenshot: 'Copy screenshot',
+  newSection: 'New Section',
+  copyPrompt: 'Copy Prompt',
+  copyRemix: 'Copy Remix Prompt',
+  viewScreenshot: 'View Screenshot',
+  copyScreenshot: 'Copy Screenshot',
   copied: 'Copied',
-  copyFailed: "Couldn't copy",
+  copyFailed: "Couldn't Copy",
   downloaded: 'Downloaded',
   back: 'Back',
   close: 'Close',

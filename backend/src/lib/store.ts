@@ -60,6 +60,7 @@ export async function listFiles(id: string, folder: Folder): Promise<string[]> {
 
 export interface ProjectMeta extends ProjectNames {
   prompt: string // the copied prompt, shipped as PROMPT.md
+  remix?: string // the same capture as a redesign brief, shipped as REMIX.md
 }
 
 const PROJECT_NAME_RE = /^[a-z][a-z0-9-]{0,62}$/
@@ -68,7 +69,7 @@ export const MAX_PROMPT_CHARS = 5_000_000
 
 export function isProjectMeta(value: unknown): value is ProjectMeta {
   if (!value || typeof value !== 'object') return false
-  const { name, component, file, prompt } = value as Record<string, unknown>
+  const { name, component, file, prompt, remix } = value as Record<string, unknown>
   return (
     typeof name === 'string' &&
     PROJECT_NAME_RE.test(name) &&
@@ -77,7 +78,8 @@ export function isProjectMeta(value: unknown): value is ProjectMeta {
     typeof component === 'string' &&
     COMPONENT_RE.test(component) &&
     typeof prompt === 'string' &&
-    prompt.length <= MAX_PROMPT_CHARS
+    prompt.length <= MAX_PROMPT_CHARS &&
+    (remix === undefined || (typeof remix === 'string' && remix.length <= MAX_PROMPT_CHARS))
   )
 }
 

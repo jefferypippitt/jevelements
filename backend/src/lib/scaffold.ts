@@ -118,7 +118,7 @@ npm-debug.log*
       path: 'AGENTS.md',
       body: `${AGENT_RULES}
 
-Build the section described in \`PROMPT.md\`. This folder is already the app: its files from the original page are in \`public/\`.
+Build the section described in \`PROMPT.md\` (a 1:1 rebuild) or \`REMIX.md\` (a redesign of it), whichever the user sends. This folder is already the app: its files from the original page are in \`public/\`.
 `,
     },
     { path: 'CLAUDE.md', body: '@AGENTS.md\n' },

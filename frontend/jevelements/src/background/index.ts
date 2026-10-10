@@ -195,14 +195,14 @@ async function put(captureId: string, folder: string, name: string, body: Blob |
   return { archive:new URL(`/api/captures/${captureId}/zip`, backendUrl).href }
 }
 
-async function saveProject({ captureId, name, component, file, prompt }: ProjectMessage): Promise<ProjectResponse> {
+async function saveProject({ captureId, name, component, file, prompt, remix }: ProjectMessage): Promise<ProjectResponse> {
   const { backendUrl, backendToken } = await getSettings()
   let res: Response
   try {
     res = await fetch(new URL(`/api/captures/${captureId}/project`, backendUrl), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...(backendToken ? { Authorization: `Bearer ${backendToken}` } : {}) },
-      body: JSON.stringify({ name, component, file, prompt }),
+      body: JSON.stringify({ name, component, file, prompt, remix }),
       signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     })
   } catch {

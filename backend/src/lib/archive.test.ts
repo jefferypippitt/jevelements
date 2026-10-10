@@ -54,7 +54,17 @@ test('appZip packs the scaffold, prompt and saved files under the project folder
   const names = [...entries.keys()]
   assert.ok(names.every((n) => n.startsWith('hero-section/')))
   assert.equal(entries.get('hero-section/PROMPT.md')?.toString('utf8'), '# hi')
+  assert.ok(!entries.has('hero-section/REMIX.md'))
   assert.deepEqual(entries.get('hero-section/public/capture/hero.png'), png)
   assert.ok(entries.has('hero-section/public/reference/code/app.js'))
   assert.ok(entries.has('hero-section/package.json'))
+})
+
+test('appZip ships the remix prompt as REMIX.md next to PROMPT.md', async () => {
+  await saveProject(id, { name: 'hero-section', component: 'HeroSection', file: 'hero-section', prompt: '# clone', remix: '# remix' })
+  const result = await appZip(id)
+  assert.ok(result)
+  const entries = readZip(result.zip)
+  assert.equal(entries.get('hero-section/PROMPT.md')?.toString('utf8'), '# clone')
+  assert.equal(entries.get('hero-section/REMIX.md')?.toString('utf8'), '# remix')
 })

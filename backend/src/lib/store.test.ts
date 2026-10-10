@@ -39,6 +39,7 @@ test('filePath rejects anything that could leave the capture', () => {
 
 test('isProjectMeta accepts valid metadata', () => {
   assert.equal(isProjectMeta(meta), true)
+  assert.equal(isProjectMeta({ ...meta, remix: '# remix' }), true)
 })
 
 test('isProjectMeta rejects invalid metadata', () => {
@@ -46,6 +47,8 @@ test('isProjectMeta rejects invalid metadata', () => {
   assert.equal(isProjectMeta({ ...meta, component: 'heroSection' }), false)
   assert.equal(isProjectMeta({ name: meta.name, component: meta.component, file: meta.file }), false)
   assert.equal(isProjectMeta({ ...meta, prompt: 'x'.repeat(MAX_PROMPT_CHARS + 1) }), false)
+  assert.equal(isProjectMeta({ ...meta, remix: 42 }), false)
+  assert.equal(isProjectMeta({ ...meta, remix: 'x'.repeat(MAX_PROMPT_CHARS + 1) }), false)
   assert.equal(isProjectMeta(null), false)
 })
 

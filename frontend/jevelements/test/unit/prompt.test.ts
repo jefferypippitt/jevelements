@@ -111,3 +111,56 @@ test('unpackaged prompt never points at public/ files', () => {
   assert.ok(prompt.includes('https://example.com/hero.png'))
   assert.ok(prompt.includes('https://example.com/inter.woff2'))
 })
+
+test('the clone prompt is unchanged by the remix mode existing', () => {
+  assert.equal(buildPrompt(richCapture(), 'clone'), buildPrompt(richCapture()))
+})
+
+test('remix prompt leads with the brief and ends with its own checklist', () => {
+  const remix = buildPrompt(richCapture(), 'remix')
+  const order = headings(remix)
+  assert.deepEqual(order.slice(0, 4), ["# Task: Remix this UI section's layout", '## Your brief', '## How to remix', '## Source'])
+  assert.equal(order.at(-1), '## Acceptance checklist')
+  assert.ok(!remix.includes('pixel-accurate 1:1 clone'))
+  assert.ok(remix.includes('Up close, an item looks exactly like the original'))
+})
+
+test('remix prompt uses the original files, fonts and text like the clone', () => {
+  const clone = buildPrompt(richCapture())
+  const remix = buildPrompt(richCapture(), 'remix')
+  const section = (text: string, heading: string) => text.split(heading)[1]?.split('\n## ')[0]
+  for (const heading of ['## Fonts', '## Images & video', '## SVGs']) {
+    if (clone.includes(heading)) assert.equal(section(remix, heading), section(clone, heading), heading)
+  }
+  assert.ok(remix.includes("Keep the section's text content exactly as written"))
+})
+
+test('remix prompt keeps the measured spec of the original', () => {
+  const clone = buildPrompt(richCapture())
+  const remix = buildPrompt(richCapture(), 'remix')
+  for (const heading of ['## Structure & exact styles', '## SVGs', "## Canvas source code (from the page's scripts)"]) {
+    assert.ok(clone.includes(heading), heading)
+    assert.ok(remix.includes(heading), heading)
+  }
+  assert.ok(remix.split('\n').some((line) => line.startsWith('## Interactions')))
+})
+
+test('minimal remix prompt heading order', () => {
+  assert.deepEqual(headings(buildPrompt(minimalCapture(), 'remix')), [
+    "# Task: Remix this UI section's layout",
+    '## Your brief',
+    '## How to remix',
+    '## Source',
+    '## Step 1: set up the Next.js app',
+    '## Stack & output',
+    '## Fonts',
+    '## Structure & exact styles',
+    '## Responsive behavior',
+    '## Capture caveats',
+    '## Acceptance checklist',
+  ])
+})
+
+test('minimal remix snapshot', (t) => {
+  t.assert.snapshot(buildPrompt(minimalCapture(), 'remix'))
+})

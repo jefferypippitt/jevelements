@@ -1,6 +1,6 @@
 # JevElements
 
-Chrome extension that turns any section of a website into a ready-to-run Next.js app. Pick a section and you get a zip with the section's assets and a prompt that rebuilds it 1:1.
+Chrome extension that turns any section of a website into a ready-to-run Next.js app. Pick a section and you get a zip with the section's assets and two prompts: `PROMPT.md` rebuilds it 1:1, and `REMIX.md` designs a new section inspired by it.
 
 ## Tech stack
 
@@ -33,6 +33,7 @@ Load `frontend/jevelements/dist` at `chrome://extensions` → **Load unpacked**.
 2. **Extract it.** Go to your `Downloads` folder, right-click the zip and choose **Extract All**.
 3. **Install.** Open the extracted folder in your editor and run `pnpm i`.
 4. **Build it.** In your coding agent, tag `@PROMPT.md`, attach a screenshot of the section, and send it. Plan mode is preferred.
+   - **Or remix it.** To get your own design instead of a copy, fill in **Your brief** at the top of `REMIX.md` (strength `subtle`, `balanced` or `bold`, plus brand, palette, type and copy; leave a line as it is and the agent decides). Then tag `@REMIX.md` instead. The remix keeps the layout idea, component structure and motion, and replaces every image, font, logo and line of copy from the original.
 
 ## More
 
