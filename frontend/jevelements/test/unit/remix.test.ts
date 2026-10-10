@@ -166,3 +166,30 @@ test('each remix round gets its own folder and a log entry', () => {
   assert.ok(remix.includes("choose from this section's moves that no earlier round used"))
   assert.ok(remix.includes("never a previous round's files"))
 })
+
+test('the brief offers preview and a style scope, and lists the moves right under it', () => {
+  const remix = buildPrompt(minimalCapture({ analysis: sure('testimonials'), parts: quotes }), 'remix')
+  const brief = remix.split('## Your brief')[1].split('\n## ')[0]
+  for (const line of ['- **Preview:** off', '- **Scope:** layout', '- **Palette:** keep', '- **Type:** keep']) assert.ok(brief.includes(line), line)
+  assert.ok(brief.includes("This section's moves, best first: `side-header`, `bento`, `marquee`, `wall-fade`"))
+  assert.ok(remix.includes('when it is `on`, propose the moves and wait'))
+  assert.ok(remix.includes("If the brief's **Preview** is `on`, stop here"))
+  assert.ok(remix.includes('### Scope: style (only when the brief sets it)'))
+  const unsure = buildPrompt(changelog(), 'remix').split('## Your brief')[1].split('\n## ')[0]
+  assert.ok(unsure.includes("This section isn't classified yet"))
+})
+
+test('rounds can be compared on /rounds and are logged with screenshots', () => {
+  const remix = buildPrompt(changelog(), 'remix')
+  assert.ok(remix.includes('`app/rounds/page.tsx` (served at `/rounds`) renders every round'))
+  assert.ok(remix.includes('`remix-shots/<n>-desktop.png`'))
+  assert.ok(remix.includes('shows on `/rounds` with every earlier round'))
+})
+
+test('testimonials get the new header and item moves; pricing never does', () => {
+  const grid = offered('testimonials', quotes)
+  for (const id of ['header-center', 'header-split', 'lead-item', 'card-deck', 'wall-fade']) assert.ok(grid.includes(id), id)
+  const pricing = remixPlan(minimalCapture({ analysis: sure('pricing'), parts: quotes })).never.map((m) => m.id)
+  for (const id of ['card-deck', 'wall-fade', 'lead-item']) assert.ok(pricing.includes(id), id)
+  assert.ok(!offered('hero', heroParts).includes('card-deck'))
+})

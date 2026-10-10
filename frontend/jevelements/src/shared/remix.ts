@@ -11,19 +11,34 @@ import type { Capture, CapturedNode } from './types'
 export type PromptMode = 'clone' | 'remix'
 
 // The brief comes first so the user can fill it in before sending REMIX.md. Left as it is, the agent
-// picks the moves from the ones that fit this section.
-export function remixTask(project: string): string {
+// picks the moves from the ones that fit this section, builds without asking, and keeps the palette
+// and type. Scope `style` is the one opt-in past a shuffle: it swaps colors and typefaces by role.
+export function remixTask(capture: Capture, project: string): string {
+  const plan = remixPlan(capture)
   return `# Task: Remix this UI section's layout
 
 You are rebuilding a UI section captured from a live website as its own **Next.js app** named \`${project}\` (see **Step 1** and **Stack & output**), in a **new layout**. Everything after **How to remix** is the measured spec of the original, the same spec as the 1:1 rebuild in PROMPT.md.
 
-A remix is a shuffle, not a redesign. The foundations stay exactly as the spec has them: every word of text, every image, video and SVG, the fonts, the colors, and how each element and item looks (its type, surface, padding, border, radius, shadow, hover). What changes is the arrangement: one or two **layout moves** from **How to remix**, chosen for the kind of section this is. A testimonials grid might get its centered header moved into a left column and its cards into a bento grid; a hero might get its headline and actions split into an asymmetric composition. Someone who knows the original should recognize every piece and see it arranged in a new way.
+A remix is a shuffle, not a redesign. The foundations stay exactly as the spec has them: every word of text, every image, video and SVG, the fonts, the colors, and how each element and item looks (its type, surface, padding, border, radius, shadow, hover). What changes is the arrangement: one or two **layout moves** from **How to remix**, chosen for the kind of section this is. A testimonials grid might get its centered header moved into a left column and its cards into a bento grid; a hero might get its headline and actions split into an asymmetric composition. Someone who knows the original should recognize every piece and see it arranged in a new way. Only when the brief sets **Scope** to \`style\` do the palette and typefaces change too (see **Scope: style**).
 
 ## Your brief
 Edit these lines before sending. A line left as it is means: decide it yourself.
 
 - **Move:** auto (one of this section's moves; on a later round, one no earlier round used. Or the id of a move from **Layout moves**, or a header move and an items or section move joined with \`+\`, e.g. \`side-header + bento\`)
-- **Notes:** none (anything else about the layout, e.g. "marquee scrolls right", "feature the third item")`
+- **Notes:** none (anything else about the layout, e.g. "marquee scrolls right", "feature the third item")
+- **Preview:** off (\`on\`: before building, propose three moves or pairings for this round, one line each, and wait for the user to pick one)
+- **Scope:** layout (\`layout\`: only the arrangement changes. \`style\`: the palette and typefaces change as well, from the two lines below)
+- **Palette:** keep (with Scope \`style\`: the new colors, as hex values or in words, e.g. "warm neutrals, one terracotta accent")
+- **Type:** keep (with Scope \`style\`: the new typeface, e.g. a Google Fonts name or "a geometric sans")
+
+${briefMoves(plan)}`
+}
+
+// The move ids, right under the brief, so the user can pick one without scrolling to **Layout moves**.
+function briefMoves(plan: RemixPlan): string {
+  if (plan.section && plan.playbook) return `This section's moves, best first: ${ids(plan.offered)}. Each one is described under **Layout moves**.`
+  if (plan.section) return `The moves this section's shape carries: ${plan.fit.length ? ids(plan.fit) : 'none matched automatically'}. Each one is described under **Layout moves**.`
+  return `This section isn't classified yet, so its moves depend on its row in **Section playbooks**. By shape alone it could carry ${plan.fit.length ? ids(plan.fit) : 'none of them automatically'}.`
 }
 
 export function remixGuide(capture: Capture): string {
@@ -37,7 +52,7 @@ ${sectionBlock(plan)}
 Exactly as in the spec (as a 1:1 rebuild would have it):
 - **Content:** every text string, as written, and the same items in the same order. No item added, dropped, merged or shortened.
 - **Assets:** every image, video, SVG and canvas, from the same files, at the same crop and aspect ratio.
-- **Typography and color:** the same font files, sizes, weights, line-heights and letter-spacing; the same colors, gradients and backgrounds. No new color, typeface or font size.
+- **Typography and color:** the same font files, sizes, weights, line-heights and letter-spacing; the same colors, gradients and backgrounds. No new color, typeface or font size (with **Scope** \`style\`, see **Scope: style**).
 - **The look of each element and item:** its surface, padding inside it, border, radius, shadow, and its hover, focus and click states.
 - **The section's frame:** its background, its outer padding, its theme and dark-mode switching.
 - **Behaviour:** every animation, scroll effect and interaction in the spec still works on the element it belongs to.
@@ -47,16 +62,24 @@ What the move changes, and only that:
 - **The motion the move brings** (a marquee's scroll, a carousel's snap, a pin), and the few controls it needs (carousel buttons, tabs), built only from the section tokens below.
 
 ### Work in four passes
-1. **Read.** ${plan.sure ? 'Start from the section\'s job (see **This section**)' : 'Decide what section this is (see **This section**) and write its job in one sentence, for yourself'}. Read \`remix-log.md\` if it exists (see **Another round**). Then choose the move or moves, from the brief or, on auto, from this section's moves under **Layout moves**: the one that best serves its job and changes the arrangement visibly. Never a move that describes the original's current arrangement (a grid that is already a bento can't get \`bento\`). Use at most one header move and one items or section move.
+1. **Read.** ${plan.sure ? 'Start from the section\'s job (see **This section**)' : 'Decide what section this is (see **This section**) and write its job in one sentence, for yourself'}. Read \`remix-log.md\` if it exists (see **Another round**). Then choose the move or moves, from the brief or, on auto, from this section's moves under **Layout moves**: the one that best serves its job and changes the arrangement visibly. Never a move that describes the original's current arrangement (a grid that is already a bento can't get \`bento\`). Use at most one header move and one items or section move. If the brief's **Preview** is \`on\`, stop here: list three moves or pairings this round could use, one line each with why it suits the section, and wait for the user to pick one (or name their own) before building anything.
 2. **Build the pieces 1:1.** The 1:1 pieces are the item components and the heading block in \`components/\`, exactly as the spec describes. If the clone from PROMPT.md or an earlier round already built them, reuse them untouched. Otherwise build them as PROMPT.md would.
-3. **Rearrange.** Write this round's layout in \`components/remix-<n>/${file}.tsx\`, exporting \`${component}Remix<n>\` (<n> is this round's number, 1 for the first), which renders the 1:1 pieces in the new arrangement. Change only the containers, as the move says, using spacing, radius and color values from **Section tokens**. Build the move's small-screen behaviour too. Point \`app/page.tsx\` at this round, and add its entry to \`remix-log.md\`.
-4. **Inspect and revise.** Run \`npm run dev\` and, if you can open a browser, screenshot the section at ${capture.viewport.w}px and at 375px wide. Compare one item up close with the original's screenshot (it should match), then the whole section (the arrangement should not). Run every check in **Acceptance checklist** and fix what fails. Keep this pass internal: deliver the section and the summary.
+3. **Rearrange.** Write this round's layout in \`components/remix-<n>/${file}.tsx\`, exporting \`${component}Remix<n>\` (<n> is this round's number, 1 for the first), which renders the 1:1 pieces in the new arrangement. Change only the containers, as the move says, using spacing, radius and color values from **Section tokens**. Build the move's small-screen behaviour too. Point \`app/page.tsx\` at this round, add it to \`app/rounds/page.tsx\`, and add its entry to \`remix-log.md\`.
+4. **Inspect and revise.** Run \`npm run dev\` and, if you can open a browser, screenshot the section at ${capture.viewport.w}px and at 375px wide, saved as \`remix-shots/<n>-desktop.png\` and \`remix-shots/<n>-mobile.png\` in the app's root. Compare one item up close with the original's screenshot (it should match), then the whole section (the arrangement should not). Run every check in **Acceptance checklist** and fix what fails. Keep this pass internal: deliver the section and the summary.
 
 ### Another round
 The user may send this prompt again, or ask in the same chat for "another one", "try again" or "something else". Each round is a new layout of the same 1:1 pieces, never a layer on top of the last round.
-- **The log.** \`remix-log.md\` in the app's root keeps one line per round, oldest first: \`<n>. <moves> | components/remix-<n>/ | <why, in a few words>\` (e.g. \`1. side-header + bento | components/remix-1/ | quotes read as a wall, first one featured\`). Create it on the first round. The round number is one more than the last line's.
+- **The log.** \`remix-log.md\` in the app's root keeps one line per round, oldest first: \`<n>. <moves> | components/remix-<n>/ | <why, in a few words> | <screenshots>\` (e.g. \`1. side-header + bento | components/remix-1/ | quotes read as a wall, first one featured | remix-shots/1-desktop.png, remix-shots/1-mobile.png\`; \`none\` for the screenshots when you couldn't open a browser). Add the scope when it is \`style\` (e.g. \`2. marquee, style: warm neutrals + Fraunces | …\`). Create it on the first round. The round number is one more than the last line's.
 - **Choosing.** A move the user names is built, even if the log has it (e.g. "use marquee", "keep the header from round 2 and try masonry"). Otherwise, choose from this section's moves that no earlier round used; a different header and items pairing counts as new. If every one is used, say so and offer the user the best pairings again rather than reaching for a move that doesn't suit this kind of section.
 - **Starting point.** Always the 1:1 pieces in their original look, never a previous round's files. Leave earlier rounds' folders as they are, so the user can switch back by pointing \`app/page.tsx\` at one.
+- **Comparing rounds.** \`app/rounds/page.tsx\` (served at \`/rounds\`) renders every round, newest first, one under the other, each headed by its log line in a small caption styled from the section tokens. Create it on the first round and add each new round to it; \`app/page.tsx\` still renders only the current round.
+
+### Scope: style (only when the brief sets it)
+With **Scope** \`style\`, the palette and typefaces change as well as the arrangement. Everything else in **What stays and what moves** holds.
+- **Palette.** Map the brief's palette onto the color roles in **Section tokens**: one new value per role (background, surfaces, text, muted text, accents, borders). Keep each role's contrast with what sits on it (body text at least 4.5:1). A role the brief doesn't cover keeps its original value. Define the new values once as CSS variables in \`app/globals.css\` and use only those. Gradients keep their stops' roles, in the new colors. With dark mode, map the dark values too.
+- **Type.** The brief's typeface replaces the original families: load it with \`next/font/google\` (or from files the user gives you). Sizes, weights, line-heights and letter-spacing stay as measured, so the hierarchy holds. A monospace or icon font stays as it is.
+- **Still unchanged:** every word, image, video and SVG artwork, the radii, shadows, border widths, spacing and motion. An SVG drawn in \`currentColor\` follows the new text color; one with fixed colors stays as it is.
+- **Palette: keep** or **Type: keep** means that half stays original.
 
 ${movesBlock(plan)}
 
@@ -73,13 +96,13 @@ It describes the original, measured, in its original arrangement.
 - **Motion, scroll story and interactions**: keep every one. When the move animates something that already moves (a marquee of items that fade in on scroll), the item's own effect plays inside the move's.
 
 ### Don't
-- re-skin: no new palette, typeface, font size, radius, shadow or border on anything the original styles
+- re-skin: no new palette, typeface, font size, radius, shadow or border on anything the original styles (with **Scope** \`style\`, only the brief's palette and typeface, mapped by role)
 - rewrite, shorten or reorder the copy, or drop items to make a layout fit (a bento with 5 items fills 5 cells)
-- add decoration: badges, pills, icons, gradients, glows, blur, noise or extra accents the original doesn't have (a move's controls and a marquee's edge mask are the only additions)
+- add decoration: badges, pills, icons, gradients, glows, blur, noise or extra accents the original doesn't have (a move's controls, a marquee's edge mask and a wall's fade are the only additions)
 - crop, recolor or swap an image to suit the new cell
 - change more than the moves you named
 
-Finish with a summary: the round number, the kind of section, the move or moves and why they suit the section, how the layout behaves at each breakpoint, and anything you added for the move (controls, wrappers).`
+Finish with a summary: the round number, the kind of section, the move or moves and why they suit the section, the scope (and, with \`style\`, the colors and typeface you mapped), how the layout behaves at each breakpoint, anything you added for the move (controls, wrappers), and where to see it (\`/\` for this round, \`/rounds\` for all of them).`
 }
 
 const human = (name: string) => name.replace(/-/g, ' ')
@@ -155,11 +178,11 @@ export function remixChecklist(capture: Capture, project: string): string {
   return `## Acceptance checklist
 ${section}
 - [ ] Side by side with the original's screenshot at ${capture.viewport.w}px wide, the arrangement is visibly different, as the named move or moves describe, and nothing else is.
-- [ ] Up close, an item looks exactly like the original's: the same type, colors, surface, padding, border, radius, shadow and media crop.
+- [ ] Up close, an item looks exactly like the original's: the same type, colors, surface, padding, border, radius, shadow and media crop (with Scope \`style\`, in the brief's colors and typeface, mapped by role).
 - [ ] Every text string in the spec appears, unchanged, and every item is there, in the original order (a marquee's hidden copy aside).
 - [ ] Every image, video and SVG comes from the spec's files, at the original crop and aspect ratio. Fonts load from the files under **Fonts**, with no failed font request.
-- [ ] No new color, typeface, font size, radius or shadow: every one in \`app/\` and \`components/\` is in the spec.${
-    reflexes ? `\n- [ ] No decoration the original doesn't have: \`grep -rnE "${reflexes}" components\` prints nothing, or each hit is the original's or the move's (a marquee's edge mask).` : ''
+- [ ] No new color, typeface, font size, radius or shadow: every one in \`app/\` and \`components/\` is in the spec (with Scope \`style\`, or is the brief's palette or typeface, defined once in \`app/globals.css\`, with body text at least 4.5:1 against its background).${
+    reflexes ? `\n- [ ] No decoration the original doesn't have: \`grep -rnE "${reflexes}" components\` prints nothing, or each hit is the original's or the move's (a marquee's edge mask, a wall's fade).` : ''
   }
 - [ ] The section keeps its background and outer padding${dna.padding ? ` (${dna.padding})` : ''}, and nothing touches its edges.
 - [ ] Every animation, scroll effect, hover and click from the spec works, and so does the move's own motion. Looping motion has no visible jump, pauses on hover and focus, and stops with prefers-reduced-motion.
@@ -167,8 +190,8 @@ ${section}
 - [ ] At 375px wide the layout follows the move's small-screen rule, with no horizontal page scroll.
 - [ ] With the OS in dark mode, the section switches as the original does.
 - [ ] It's a standalone Next.js app in \`${project}/\`: \`npm run build\` passes with no type errors, and \`npm run dev\` shows the section on the home page.
-- [ ] This round lives in its own \`components/remix-<n>/\`, uses no file from an earlier round, has its line in \`remix-log.md\`, and is the one \`app/page.tsx\` renders. Without a move named by the user, its moves differ from every earlier round's.
-- [ ] The final summary gives the round number, the kind of section, names the moves, why they suit the section, the breakpoint behaviour and anything added.`
+- [ ] This round lives in its own \`components/remix-<n>/\`, uses no file from an earlier round, has its line in \`remix-log.md\` (with its screenshots, if you could take them), shows on \`/rounds\` with every earlier round, and is the one \`app/page.tsx\` renders. Without a move named by the user, its moves differ from every earlier round's.
+- [ ] The final summary gives the round number, the kind of section, names the moves, why they suit the section, the scope, the breakpoint behaviour and anything added.`
 }
 
 // ---------- Section tokens: the original's values by role, read from the captured tree ----------

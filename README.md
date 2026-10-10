@@ -33,7 +33,11 @@ Load `frontend/jevelements/dist` at `chrome://extensions` → **Load unpacked**.
 2. **Extract it.** Go to your `Downloads` folder, right-click the zip and choose **Extract All**.
 3. **Install.** Open the extracted folder in your editor and run `pnpm i`.
 4. **Build it.** In your coding agent, tag `@PROMPT.md`, attach a screenshot of the section, and send it. Plan mode is preferred.
-   - **Or remix it.** To get your own design instead of a copy, fill in **Your brief** at the top of `REMIX.md` (strength `subtle`, `balanced` or `bold`, plus brand, palette, type and copy; leave a line as it is and the agent decides). Then tag `@REMIX.md` instead. The remix keeps the layout idea, component structure and motion, and replaces every image, font, logo and line of copy from the original.
+   - **Or remix it.** To get the same section in a new layout, tag `@REMIX.md` instead. The remix keeps every word, image, font and color, and rearranges them with one or two layout moves that suit the kind of section (a testimonials grid might get its header moved to the side and its cards turned into a bento). To steer it, edit **Your brief** at the top of `REMIX.md` first. Leave a line as it is and the agent decides.
+     - **Move:** pick a move from the list under the brief, e.g. `side-header + bento`.
+     - **Preview:** `on` to have the agent propose three options and wait for your pick.
+     - **Scope:** `style` to change the palette and typeface too, from the **Palette** and **Type** lines.
+   - **Another round.** Say "another one" in the same chat, or tag `@REMIX.md` again. Each round gets its own `components/remix-<n>/` folder and a line in `remix-log.md`. Open `/rounds` to compare them all.
 
 ## More
 

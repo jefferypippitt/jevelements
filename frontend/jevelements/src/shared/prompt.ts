@@ -250,9 +250,9 @@ export function buildPrompt(capture: Capture, mode: PromptMode = 'clone'): strin
 
   sections.push(`${
     remix
-      ? `${remixTask(projectName(capture))}
+      ? `${remixTask(capture, projectName(capture))}
 
-**Work autonomously.** Do not ask the user any questions, offer options, or wait for confirmation: everything you need is in the brief, this spec and the attached screenshot. Where the brief leaves something open, decide it and keep going. List your decisions in your final summary.`
+**Work autonomously.** Do not ask the user any questions, offer options, or wait for confirmation: everything you need is in the brief, this spec and the attached screenshot. Where the brief leaves something open, decide it and keep going. List your decisions in your final summary. The one exception is **Preview** in the brief: when it is \`on\`, propose the moves and wait for the user's pick before building.`
       : `# Task: Recreate this UI section 1:1
 
 You are rebuilding a UI section captured from a live website as its own **Next.js app** named \`${projectName(capture)}\` (see **Step 1** and **Stack & output**).
@@ -274,7 +274,7 @@ The goal is a **pixel-accurate 1:1 clone**: the same structure, layout, dimensio
 - Rendered size: **${root.box.w}×${root.box.h}px**, at a viewport of ${capture.viewport.w}×${capture.viewport.h}px (devicePixelRatio ${capture.viewport.dpr})
 - Screenshot: ${hasScreenshot ? `one, attached to this message${capture.project && capture.saved?.screenshot ? ` and saved as \`public/reference/${capture.saved.screenshot}\`` : ''}` : 'any image attached to this message'}. It is the section's initial look${capture.fullScreenshot ? ', the whole section top to bottom' : ''}: ${
     remix
-      ? "match every element's and item's look to it (type, colors, imagery, surfaces), but not its arrangement: that is what the layout move changes (see **How to remix**). Scroll, hover and click states have no screenshots: build them from **Scroll story** and **Interactions**"
+      ? "match every element's and item's look to it (type, colors, imagery, surfaces), but not its arrangement: that is what the layout move changes (see **How to remix**). With **Scope** `style`, colors and typefaces follow the brief instead (see **Scope: style**). Scroll, hover and click states have no screenshots: build them from **Scroll story** and **Interactions**"
       : `build to match it, and use it as the visual source of truth for anything this text spec does not cover. Scroll, hover and click states have no screenshots: build them from **Scroll story** and **Interactions**`
   }${hoverFrames(capture).length ? ', except the hover and click sweeps, whose frames are listed under **Pointer hover** and **Click sweep**' : ''}. The screenshot is reference only: do not render it in the section.`)
 
