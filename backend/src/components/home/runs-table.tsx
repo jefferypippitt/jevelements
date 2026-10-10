@@ -3,6 +3,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { Run } from '@/lib/runs'
 import { cn } from '@/lib/utils'
+import { ClearRunsButton } from './clear-runs-button'
 
 const PROVIDER: Record<Run['provider'], string> = {
   typesafe: 'TypeSafe',
@@ -27,9 +28,12 @@ export function RunsTable({ runs }: { runs: Run[] }) {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-base font-medium tracking-tight">Recent Analyses</h2>
-        <p className="text-sm text-muted-foreground">Reload the page to see new analyses.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-base font-medium tracking-tight">Recent Analyses</h2>
+          <p className="text-sm text-muted-foreground">Reload the page to see new analyses.</p>
+        </div>
+        <ClearRunsButton count={runs.length} />
       </div>
       <div className="rounded-none border">
         <Table className="table-fixed min-w-4xl border-collapse [&_td:not(:last-child)]:border-r [&_th:not(:last-child)]:border-r">
