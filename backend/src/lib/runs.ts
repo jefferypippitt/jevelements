@@ -2,7 +2,7 @@
 // AI Gateway fallback ran. The status page (app/page.tsx) reads it. Kept as one JSON file in the OS
 // temp directory, next to the capture staging, so route handlers and the page see the same log.
 // Local development only: in production nothing is recorded, so no captured page URL is kept.
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { storesLocally } from './local'
@@ -36,6 +36,14 @@ export function recordRun(run: Run): Promise<void> {
     await writeFile(tmp, JSON.stringify(runs))
     await rename(tmp, FILE)
   }).catch((err) => console.warn('[runs] could not save run', err))
+  return pending
+}
+
+// Empties the log (the status page's Delete all). Queued behind any run still being written, so a
+// run that finishes during the clear can't bring the old entries back.
+export function clearRuns(): Promise<void> {
+  if (!storesLocally()) return Promise.resolve()
+  pending = pending.then(() => rm(FILE, { force: true })).catch((err) => console.warn('[runs] could not clear runs', err))
   return pending
 }
 
