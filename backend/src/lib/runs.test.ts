@@ -1,25 +1,23 @@
 import assert from 'node:assert/strict'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, before, test } from 'node:test'
 import { clearRuns, readRuns, recordRun, type Run } from '@/lib/runs'
 
 const env = process.env as Record<string, string | undefined>
-const file = path.join(tmpdir(), 'jevelements-runs.json')
 let savedEnv: string | undefined
-let backup: string | null = null
 
-// The log lives at a fixed path in the real temp dir, so keep the developer's copy and put it back.
-before(async () => {
+// Own log file, so these tests never touch the developer's real log or race other test files.
+before(() => {
   savedEnv = env.NODE_ENV
   env.NODE_ENV = 'development'
-  backup = await readFile(file, 'utf8').catch(() => null)
+  env.JEV_RUNS_FILE = path.join(tmpdir(), `jevelements-runs-test-${process.pid}-${Date.now()}.json`)
 })
 
 after(async () => {
-  if (backup !== null) await writeFile(file, backup)
-  else await rm(file, { force: true })
+  await rm(env.JEV_RUNS_FILE!, { force: true })
+  delete env.JEV_RUNS_FILE
   if (savedEnv === undefined) delete env.NODE_ENV
   else env.NODE_ENV = savedEnv
 })
