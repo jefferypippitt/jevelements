@@ -36,6 +36,7 @@ ${briefMoves(plan)}`
 
 // The move ids, right under the brief, so the user can pick one without scrolling to **Layout moves**.
 function briefMoves(plan: RemixPlan): string {
+  if (plan.section && plan.playbook && !plan.fit.length) return `This section's moves are ${ids(plan.offered)}, but its content carries none of them, so on auto you'll be asked which to try. Each one is described under **Layout moves**.`
   if (plan.section && plan.playbook) return `This section's moves, best first: ${ids(plan.offered)}. Each one is described under **Layout moves**.`
   if (plan.section) return `The moves this section's shape carries: ${plan.fit.length ? ids(plan.fit) : 'none matched automatically'}. Each one is described under **Layout moves**.`
   return `This section isn't classified yet, so its moves depend on its row in **Section playbooks**. By shape alone it could carry ${plan.fit.length ? ids(plan.fit) : 'none of them automatically'}.`
@@ -139,10 +140,14 @@ function describe(moves: Move[]): string {
 function movesBlock(plan: RemixPlan): string {
   const { section, playbook } = plan
   if (section && playbook) {
-    const narrowed = plan.fit.length < plan.offered.length ? ` Of those, its content carries ${ids(plan.fit)}.` : ''
+    const narrowed = !plan.fit.length
+      ? ` Its content carries none of them (see **This section**). On auto, don't force one or reach outside this list: stop before building, tell the user why none fits, list these moves with what each would cost the section, and build only the one they name.`
+      : plan.fit.length < plan.offered.length
+        ? ` Of those, its content carries ${ids(plan.fit)}.`
+        : ''
     const never = plan.never.length ? `\n\n**Never for a ${human(section)} section:** ${ids(plan.never)}: ${playbook.why}. A move the user names is still built; if it's one of these, say in your summary what it costs the section.` : ''
     return `### Layout moves
-The moves for a ${human(section)} section, best first: ${ids(plan.offered)}.${narrowed} Choose from these.${never}
+The moves for a ${human(section)} section, best first: ${ids(plan.offered)}.${narrowed}${plan.fit.length ? ' Choose from these.' : ''}${never}
 
 ${describe(plan.offered)}`
   }

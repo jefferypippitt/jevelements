@@ -3,7 +3,7 @@
 // reading when that is unsure), then picks only from that section's moves: a hero never becomes a
 // marquee, a pricing table never hides tiers in a carousel. A new section type is one PLAYBOOKS entry;
 // a new move is one MOVES entry, offered wherever a playbook lists it.
-import type { Capture, SectionPart } from './types'
+import type { Capture, CapturedNode, SectionPart } from './types'
 
 // ---------- Layout moves ----------
 
@@ -29,6 +29,7 @@ export interface Shape {
   media: boolean // each item shows an image or video
   uneven: boolean // the items' text lengths differ a lot
   header: boolean // a heading block above or beside the items
+  centered: boolean // the heading sits centered in the section
 }
 
 export const MOVES: Move[] = [
@@ -56,7 +57,7 @@ export const MOVES: Move[] = [
     name: 'Header centered',
     does: 'A heading block that sits left-aligned, beside the items or split across a row, moves to the top and centers: title, intro and link stacked and center-aligned, the intro capped at about 60ch. The items stay below.',
     build: 'One column above the items, `text-align: center` and `margin-inline: auto` on the heading block, with the original gap to the items. The link, if any, centers under the intro. It stays centered on small screens.',
-    fits: (s) => s.header && s.items >= 2,
+    fits: (s) => s.header && !s.centered && s.items >= 2,
     when: 'a heading block that isn\'t centered, and repeated items',
   },
   {
@@ -293,7 +294,29 @@ export function sectionShape(capture: Capture): Shape {
     media,
     uneven: lengths.length > 1 && Math.max(...lengths) > 1.5 * Math.min(...lengths),
     header: all.some((p) => p.kind === 'heading' || p.kind === 'header'),
+    centered: headingCentered(capture.root),
   }
+}
+
+// The first visible heading: centered by its text-align (inherited, so read down the tree), or by
+// sitting in the middle of the section while clearly narrower than it (margin: auto, align-items).
+// A block heading spans its container whatever its text does, so only a narrow box counts.
+function headingCentered(root: CapturedNode): boolean {
+  const width = root.box.w
+  const find = (node: CapturedNode, align: string): boolean | null => {
+    if (node.hidden) return null
+    const here = node.styles['text-align'] ?? align
+    if (/^h[1-6]$/i.test(node.tag)) {
+      if (here.includes('center')) return true
+      return width > 0 && node.box.w < 0.7 * width && Math.abs(node.box.x + node.box.w / 2 - width / 2) < 0.04 * width
+    }
+    for (const child of node.children) {
+      const found = find(child, here)
+      if (found !== null) return found
+    }
+    return null
+  }
+  return find(root, 'start') ?? false
 }
 
 // ---------- Playbooks: the moves that suit each kind of section ----------
@@ -397,7 +420,7 @@ export const TYPE_PLAYBOOKS: Record<string, Entry> = {
   },
   problem: { family: 'features', job: 'recognize their own problem', moves: ['side-header', 'header-row', 'header-center', 'rows', 'bento', 'sticky-stack', 'split'] },
   'feature-grid': { family: 'features', moves: ['side-header', 'bento', 'spotlight', 'lead-item', 'offset-columns', 'tabs', 'sticky-stack', 'rows', 'header-row', 'header-center', 'header-split', 'carousel', 'zigzag'] },
-  'feature-rows': { family: 'features', keep: ["Each feature's text stays beside its visual."], moves: ['sticky-stack', 'tabs', 'spotlight', 'side-header', 'bento', 'header-row', 'zigzag'] },
+  'feature-rows': { family: 'features', keep: ["Each feature's text stays beside its visual."], moves: ['sticky-stack', 'tabs', 'spotlight', 'side-header', 'bento', 'header-row'] },
   'bento-grid': { family: 'features', moves: ['side-header', 'header-row', 'header-center', 'spotlight', 'offset-columns', 'tabs', 'sticky-stack'] },
   'feature-showcase': { family: 'features', keep: ['The visual stays the focus.'], moves: ['asymmetric', 'split', 'reverse', 'media-stage', 'tabs'] },
   'how-it-works': {
@@ -442,7 +465,7 @@ export interface RemixPlan {
   playbook: Playbook | null // null for a sure section with no playbook (card, other): moves by shape
   shape: Shape
   offered: Move[] // the moves the prompt describes, best first
-  fit: Move[] // the offered moves the section's shape can carry, best first
+  fit: Move[] // the offered moves the section's shape can carry, best first (empty: the agent asks the user)
   never: Move[]
 }
 
@@ -467,5 +490,5 @@ export function remixPlan(capture: Capture): RemixPlan {
   const playbook = playbookFor(section)
   const offered = playbook ? byId(playbook.moves) : MOVES.filter((m) => !m.only)
   const fit = offered.filter((m) => m.fits(shape))
-  return { section, sure: true, guess: null, playbook, shape, offered, fit: fit.length || !playbook ? fit : offered, never: byId(playbook?.never ?? []) }
+  return { section, sure: true, guess: null, playbook, shape, offered, fit, never: byId(playbook?.never ?? []) }
 }

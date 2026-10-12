@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { buildPrompt } from '../../src/shared/prompt'
 import { designDna } from '../../src/shared/remix'
 import { FAMILY_PLAYBOOKS, MOVES, remixPlan, sectionShape, TYPE_PLAYBOOKS } from '../../src/shared/remix-moves'
-import type { SectionAnalysis, SectionPart } from '../../src/shared/types'
+import type { CapturedNode, SectionAnalysis, SectionPart } from '../../src/shared/types'
 import { minimalCapture, node } from './fixtures'
 
 // Like the Cursor changelog: a heading, four flat cards (date + title), one orange link, no section fill.
@@ -63,7 +65,7 @@ test('designDna lists type, shape and the element inventory', () => {
 })
 
 test('sectionShape reads the repeated items and the header', () => {
-  assert.deepEqual(sectionShape(changelog()), { items: 4, item: 'a.card', columns: 4, media: false, uneven: false, header: true })
+  assert.deepEqual(sectionShape(changelog()), { items: 4, item: 'a.card', columns: 4, media: false, uneven: false, header: true, centered: false })
   const quotes = sectionShape(minimalCapture({ parts: testimonial(6, ['Short.', 'A much longer quote that runs on.', 'Mid length one'], true) }))
   assert.equal(quotes.items, 6)
   assert.equal(quotes.media, true)
@@ -192,4 +194,56 @@ test('testimonials get the new header and item moves; pricing never does', () =>
   const pricing = remixPlan(minimalCapture({ analysis: sure('pricing'), parts: quotes })).never.map((m) => m.id)
   for (const id of ['card-deck', 'wall-fade', 'lead-item']) assert.ok(pricing.includes(id), id)
   assert.ok(!offered('hero', heroParts).includes('card-deck'))
+})
+
+// The heading as a centered section has it: on its own text-align, inherited from a wrapper, or in a
+// narrow box in the middle of the section.
+const withHeading = (wrapper: Record<string, string>, heading: Partial<CapturedNode>) =>
+  minimalCapture({
+    analysis: sure('testimonials'),
+    parts: quotes,
+    root: node({
+      tag: 'section',
+      box: { x: 0, y: 0, w: 1440, h: 600 },
+      children: [node({ tag: 'div', styles: wrapper, box: { x: 120, y: 0, w: 1200, h: 80 }, children: [node({ tag: 'h2', text: 'Loved by teams', box: { x: 120, y: 0, w: 1200, h: 40 }, ...heading })] })],
+    }),
+  })
+
+test('a centered heading is read as centered, and is never offered header-center', () => {
+  assert.equal(sectionShape(withHeading({ 'text-align': 'center' }, {})).centered, true)
+  assert.equal(sectionShape(withHeading({}, { styles: { 'text-align': 'center' } })).centered, true)
+  assert.equal(sectionShape(withHeading({}, { box: { x: 420, y: 0, w: 600, h: 40 } })).centered, true)
+  // left-aligned text in a full-width container that is itself centered is not
+  assert.equal(sectionShape(withHeading({}, {})).centered, false)
+  assert.equal(sectionShape(withHeading({ 'text-align': 'center' }, { styles: { 'text-align': 'left' } })).centered, false)
+
+  assert.ok(!remixPlan(withHeading({ 'text-align': 'center' }, {})).fit.some((m) => m.id === 'header-center'))
+  assert.ok(remixPlan(withHeading({}, {})).fit.some((m) => m.id === 'header-center'))
+})
+
+test('feature rows are never offered the zigzag they already are', () => {
+  assert.ok(!offered('feature-rows', quotes).includes('zigzag'))
+})
+
+test('a section whose content carries none of its moves asks instead of forcing one', () => {
+  const twoTiers: SectionPart[] = [{ name: 'div.tier', kind: 'group', box: { x: 0, y: 0, w: 400, h: 500 }, repeats: 2, items: ['Free', 'Pro'] }]
+  const capture = minimalCapture({ analysis: sure('pricing'), parts: twoTiers, root: node({ tag: 'section', box: { x: 0, y: 0, w: 1440, h: 600 } }) })
+  const plan = remixPlan(capture)
+  assert.deepEqual(plan.fit, [])
+  assert.deepEqual(plan.offered.map((m) => m.id), ['header-row', 'side-header', 'rows'])
+  const prompt = buildPrompt(capture, 'remix')
+  assert.ok(prompt.includes("its content carries none of them, so on auto you'll be asked which to try"))
+  assert.ok(prompt.includes("On auto, don't force one or reach outside this list: stop before building"))
+  assert.ok(!prompt.includes('Choose from these.'))
+})
+
+// The extension can't import the backend, so this reads its list of section types from the repo.
+test('every section type the backend can return has a playbook, or chooses by shape', () => {
+  const anatomy = readFileSync(fileURLToPath(new URL('../../../../backend/src/lib/anatomy.ts', import.meta.url)), 'utf8')
+  const block = anatomy.slice(anatomy.indexOf('export const SECTION_TYPES'), anatomy.indexOf('export type SectionType'))
+  const types = [...block.matchAll(/^ {2}'?([a-z-]+)'?: \{/gm)].map((m) => m[1])
+  assert.ok(types.length > 20, 'read the backend section types')
+  const byShape = ['card', 'other'] // no playbook on purpose: see 'a sure section without a playbook chooses by shape'
+  for (const type of types) assert.ok(TYPE_PLAYBOOKS[type] || byShape.includes(type), `no playbook for backend type ${type}`)
+  for (const type of Object.keys(TYPE_PLAYBOOKS)) assert.ok(types.includes(type), `playbook for unknown type ${type}`)
 })
