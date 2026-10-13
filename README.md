@@ -2,6 +2,8 @@
 
 Chrome extension that turns any section of a website into a ready-to-run Next.js app. Pick a section and you get a zip with the section's assets and two prompts: `PROMPT.md` rebuilds it 1:1, and `REMIX.md` designs a new section inspired by it.
 
+![JevElements demo](docs/demo.gif)
+
 ## Tech stack
 
 | Part | Powered by |
